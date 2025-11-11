@@ -1,16 +1,83 @@
+"""Command-line entry points and configuration helpers for MLX OpenAI Server.
+
+This module exposes the Click command group used by the package's CLI
+and provides helpers to build the server configuration used by the
+``launch`` command. The CLI wires the configuration into the server
+setup utilities in :mod:`app.server` and starts a Uvicorn instance.
+
+Typical usage (from project root):
+
+    python -m app.main launch --model-path /path/to/model
+
+The main artifacts defined here are:
+- ``cli``: the top-level Click group
+- ``get_server_config``: cached constructor for configuration objects
+- ``launch``: command that starts the FastAPI/Uvicorn server
+"""
+
 import sys
-import asyncio
+from functools import lru_cache
+
 import click
 import uvicorn
 from loguru import logger
-from functools import lru_cache
-from app.version import __version__
-from app.main import setup_server
+
 from app.handler.parser.factory import PARSER_REGISTRY
+from app.server import setup_server
+from app.version import __version__
+
+
+class UpperChoice(click.Choice):
+    """A case-insensitive variant of :class:`click.Choice`.
+
+    ``UpperChoice`` compares candidate values case-insensitively to the
+    configured choices and returns the matched value in upper-case.
+    """
+
+    def normalize_choice(self, choice, ctx):
+        """Normalize a user-provided choice to an uppercase value.
+
+        Returns ``None`` when ``choice`` is ``None``. If a matching
+        option (case-insensitive) is found, the method returns the
+        uppercase form of that option. Otherwise it raises
+        :class:`click.BadParameter`.
+        """
+        if choice is None:
+            return None
+        upperchoice = choice.upper()
+        for opt in self.choices:
+            if opt.upper() == upperchoice:
+                return upperchoice
+        raise click.BadParameter(
+            f"invalid choice: {choice!r}. (choose from {', '.join(map(repr, self.choices))})"
+        )
+
 
 class Config:
     """Configuration container for server parameters."""
-    def __init__(self, model_path, model_type, context_length, port, host, max_concurrency, queue_timeout, queue_size, disable_auto_resize=False, quantize=8, config_name=None, lora_paths=None, lora_scales=None, log_file=None, no_log_file=False, log_level="INFO", enable_auto_tool_choice=False, tool_call_parser=None, reasoning_parser=None):
+
+    def __init__(
+        self,
+        model_path,
+        model_type,
+        context_length,
+        port,
+        host,
+        max_concurrency,
+        queue_timeout,
+        queue_size,
+        disable_auto_resize,
+        quantize,
+        config_name,
+        lora_paths,
+        lora_scales,
+        log_file,
+        no_log_file,
+        log_level,
+        enable_auto_tool_choice,
+        tool_call_parser,
+        reasoning_parser,
+    ):
         self.model_path = model_path
         self.model_type = model_type
         self.context_length = context_length
@@ -28,18 +95,19 @@ class Config:
         self.enable_auto_tool_choice = enable_auto_tool_choice
         self.tool_call_parser = tool_call_parser
         self.reasoning_parser = reasoning_parser
-        
+
         # Process comma-separated LoRA paths and scales
         if lora_paths:
-            self.lora_paths = [path.strip() for path in lora_paths.split(',') if path.strip()]
+            self.lora_paths = [path.strip() for path in lora_paths.split(",") if path.strip()]
         else:
             self.lora_paths = None
-            
+
         if lora_scales:
-            self.lora_scales = [float(scale.strip()) for scale in lora_scales.split(',') if scale.strip()]
+            self.lora_scales = [
+                float(scale.strip()) for scale in lora_scales.split(",") if scale.strip()
+            ]
         else:
             self.lora_scales = None
-
 
     @property
     def model_identifier(self):
@@ -51,24 +119,24 @@ class Config:
 # Configure basic logging for CLI (will be overridden by main.py)
 logger.remove()  # Remove default handler
 logger.add(
-    sys.stderr, 
+    sys.stderr,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-           "<level>{level: <8}</level> | "
-           "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-           "✦ <level>{message}</level>",
+    "<level>{level: <8}</level> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+    "✦ <level>{message}</level>",
     colorize=True,
-    level="INFO"
+    level="INFO",
 )
 
 
 @click.group()
 @click.version_option(
-    version=__version__, 
+    version=__version__,
     message="""
 ✨ %(prog)s - OpenAI Compatible API Server for MLX models ✨
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🚀 Version: %(version)s
-"""
+""",
 )
 def cli():
     """MLX Server - OpenAI Compatible API for MLX models."""
@@ -76,7 +144,27 @@ def cli():
 
 
 @lru_cache(maxsize=1)
-def get_server_config(model_path, model_type, context_length, port, host, max_concurrency, queue_timeout, queue_size, quantize, config_name, lora_paths, lora_scales, disable_auto_resize, log_file, no_log_file, log_level, enable_auto_tool_choice, tool_call_parser, reasoning_parser):
+def get_server_config(
+    model_path,
+    model_type,
+    context_length,
+    port,
+    host,
+    max_concurrency,
+    queue_timeout,
+    queue_size,
+    quantize,
+    config_name,
+    lora_paths,
+    lora_scales,
+    disable_auto_resize,
+    log_file,
+    no_log_file,
+    log_level,
+    enable_auto_tool_choice,
+    tool_call_parser,
+    reasoning_parser,
+):
     """Cache and return server configuration to avoid redundant processing."""
     return Config(
         model_path=model_path,
@@ -97,7 +185,7 @@ def get_server_config(model_path, model_type, context_length, port, host, max_co
         log_level=log_level,
         enable_auto_tool_choice=enable_auto_tool_choice,
         tool_call_parser=tool_call_parser,
-        reasoning_parser=reasoning_parser
+        reasoning_parser=reasoning_parser,
     )
 
 
@@ -122,154 +210,184 @@ def print_startup_banner(args):
             logger.info(f"🔮 LoRA Paths: {args.lora_paths}")
         if args.lora_scales:
             logger.info(f"🔮 LoRA Scales: {args.lora_scales}")
-    if hasattr(args, 'disable_auto_resize') and args.disable_auto_resize and args.model_type == "multimodal":
-        logger.info(f"🖼️ Auto-resize: Disabled")
+    if (
+        hasattr(args, "disable_auto_resize")
+        and args.disable_auto_resize
+        and args.model_type == "multimodal"
+    ):
+        logger.info("🖼️ Auto-resize: Disabled")
     if args.model_type in ["lm", "multimodal"]:
         if args.enable_auto_tool_choice:
-            logger.info(f"🔧 Auto Tool Choice: Enabled")
+            logger.info("🔧 Auto Tool Choice: Enabled")
         if args.tool_call_parser:
             logger.info(f"🔧 Tool Call Parser: {args.tool_call_parser}")
         if args.reasoning_parser:
             logger.info(f"🔧 Reasoning Parser: {args.reasoning_parser}")
     logger.info(f"📝 Log Level: {args.log_level}")
     if args.no_log_file:
-        logger.info(f"📝 File Logging: Disabled")
+        logger.info("📝 File Logging: Disabled")
     elif args.log_file:
         logger.info(f"📝 Log File: {args.log_file}")
     else:
-        logger.info(f"📝 Log File: logs/app.log (default)")
+        logger.info("📝 Log File: logs/app.log (default)")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
 
 @cli.command()
 @click.option(
-    "--model-path", 
-    help="Path to the model (required for lm, multimodal, embeddings, image-generation, image-edit, whisper model types). With `image-generation` or `image-edit` model types, it should be the local path to the model."
+    "--model-path",
+    help="Path to the model (required for lm, multimodal, embeddings, image-generation, image-edit, whisper model types). With `image-generation` or `image-edit` model types, it should be the local path to the model.",
 )
 @click.option(
     "--model-type",
     default="lm",
-    type=click.Choice(["lm", "multimodal", "image-generation", "image-edit", "embeddings", "whisper"]),
-    help="Type of model to run (lm: text-only, multimodal: text+vision+audio, image-generation: flux image generation, image-edit: flux image edit, embeddings: text embeddings, whisper: audio transcription)"
+    type=click.Choice(
+        ["lm", "multimodal", "image-generation", "image-edit", "embeddings", "whisper"]
+    ),
+    help="Type of model to run (lm: text-only, multimodal: text+vision+audio, image-generation: flux image generation, image-edit: flux image edit, embeddings: text embeddings, whisper: audio transcription)",
 )
 @click.option(
     "--context-length",
     default=None,
     type=int,
-    help="Context length for language models. Only works with `lm` or `multimodal` model types."
+    help="Context length for language models. Only works with `lm` or `multimodal` model types.",
 )
+@click.option("--port", default=8000, type=int, help="Port to run the server on")
+@click.option("--host", default="0.0.0.0", help="Host to run the server on")
 @click.option(
-    "--port", 
-    default=8000, 
-    type=int, 
-    help="Port to run the server on"
+    "--max-concurrency", default=1, type=int, help="Maximum number of concurrent requests"
 )
-@click.option(
-    "--host", 
-    default="0.0.0.0", 
-    help="Host to run the server on"
-)
-@click.option(
-    "--max-concurrency", 
-    default=1, 
-    type=int, 
-    help="Maximum number of concurrent requests"
-)
-@click.option(
-    "--queue-timeout", 
-    default=300, 
-    type=int, 
-    help="Request timeout in seconds"
-)
-@click.option(
-    "--queue-size", 
-    default=100, 
-    type=int, 
-    help="Maximum queue size for pending requests"
-)
+@click.option("--queue-timeout", default=300, type=int, help="Request timeout in seconds")
+@click.option("--queue-size", default=100, type=int, help="Maximum queue size for pending requests")
 @click.option(
     "--quantize",
     default=8,
     type=int,
-    help="Quantization level for the model. Only used for image-generation and image-edit Flux models."
+    help="Quantization level for the model. Only used for image-generation and image-edit Flux models.",
 )
 @click.option(
     "--config-name",
     default=None,
     type=click.Choice(["flux-schnell", "flux-dev", "flux-krea-dev", "flux-kontext-dev"]),
-    help="Config name of the model. Only used for image-generation and image-edit Flux models."
+    help="Config name of the model. Only used for image-generation and image-edit Flux models.",
 )
 @click.option(
     "--lora-paths",
     default=None,
     type=str,
-    help="Path to the LoRA file(s). Multiple paths should be separated by commas."
+    help="Path to the LoRA file(s). Multiple paths should be separated by commas.",
 )
 @click.option(
     "--lora-scales",
     default=None,
     type=str,
-    help="Scale factor for the LoRA file(s). Multiple scales should be separated by commas."
+    help="Scale factor for the LoRA file(s). Multiple scales should be separated by commas.",
 )
 @click.option(
     "--disable-auto-resize",
     is_flag=True,
-    help="Disable automatic model resizing. Only work for Vision Language Models."
+    help="Disable automatic model resizing. Only work for Vision Language Models.",
 )
 @click.option(
     "--log-file",
     default=None,
     type=str,
-    help="Path to log file. If not specified, logs will be written to 'logs/app.log' by default."
+    help="Path to log file. If not specified, logs will be written to 'logs/app.log' by default.",
 )
 @click.option(
     "--no-log-file",
     is_flag=True,
-    help="Disable file logging entirely. Only console output will be shown."
+    help="Disable file logging entirely. Only console output will be shown.",
 )
 @click.option(
     "--log-level",
     default="INFO",
-    type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
-    help="Set the logging level. Default is INFO."
+    type=UpperChoice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
 )
 @click.option(
     "--enable-auto-tool-choice",
     is_flag=True,
-    help="Enable automatic tool choice. Only works with language models."
+    help="Enable automatic tool choice. Only works with language models.",
 )
 @click.option(
     "--tool-call-parser",
     default=None,
     type=click.Choice(list(PARSER_REGISTRY.keys())),
-    help="Specify tool call parser to use instead of auto-detection. Only works with language models."
+    help="Specify tool call parser to use instead of auto-detection. Only works with language models.",
 )
 @click.option(
     "--reasoning-parser",
     default=None,
     type=click.Choice(list(PARSER_REGISTRY.keys())),
-    help="Specify reasoning parser to use instead of auto-detection. Only works with language models."
+    help="Specify reasoning parser to use instead of auto-detection. Only works with language models.",
 )
-def launch(model_path, model_type, context_length, port, host, max_concurrency, queue_timeout, queue_size, quantize, config_name, lora_paths, lora_scales, disable_auto_resize, log_file, no_log_file, log_level, enable_auto_tool_choice, tool_call_parser, reasoning_parser):
+def launch(
+    model_path,
+    model_type,
+    context_length,
+    port,
+    host,
+    max_concurrency,
+    queue_timeout,
+    queue_size,
+    quantize,
+    config_name,
+    lora_paths,
+    lora_scales,
+    disable_auto_resize,
+    log_file,
+    no_log_file,
+    log_level,
+    enable_auto_tool_choice,
+    tool_call_parser,
+    reasoning_parser,
+):
     """Launch the MLX server with the specified model."""
     try:
         # Validate that config name is only used with image-generation and image-edit model types
         if config_name and model_type not in ["image-generation", "image-edit"]:
-            logger.warning(f"Config name parameter '{config_name}' provided but model type is '{model_type}'. Config name is only used with image-generation and image-edit models.")
+            logger.warning(
+                f"Config name parameter '{config_name}' provided but model type is '{model_type}'. Config name is only used with image-generation and image-edit models."
+            )
         elif model_type == "image-generation" and not config_name:
-            logger.warning("Model type is 'image-generation' but no config name specified. Using default 'flux-schnell'.")
+            logger.warning(
+                "Model type is 'image-generation' but no config name specified. Using default 'flux-schnell'."
+            )
             config_name = "flux-schnell"
         elif model_type == "image-edit" and not config_name:
-            logger.warning("Model type is 'image-edit' but no config name specified. Using default 'flux-kontext-dev'.")
+            logger.warning(
+                "Model type is 'image-edit' but no config name specified. Using default 'flux-kontext-dev'."
+            )
             config_name = "flux-kontext-dev"
-        
+
         # Get optimized configuration
-        args = get_server_config(model_path, model_type, context_length, port, host, max_concurrency, queue_timeout, queue_size, quantize, config_name, lora_paths, lora_scales, disable_auto_resize, log_file, no_log_file, log_level, enable_auto_tool_choice, tool_call_parser, reasoning_parser)
-        
+        args = get_server_config(
+            model_path,
+            model_type,
+            context_length,
+            port,
+            host,
+            max_concurrency,
+            queue_timeout,
+            queue_size,
+            quantize,
+            config_name,
+            lora_paths,
+            lora_scales,
+            disable_auto_resize,
+            log_file,
+            no_log_file,
+            log_level,
+            enable_auto_tool_choice,
+            tool_call_parser,
+            reasoning_parser,
+        )
+
         # Display startup information
         print_startup_banner(args)
-        
+
         # Set up and start the server
-        config = asyncio.run(setup_server(args))
+        config = setup_server(args)
         logger.info("Server configuration complete.")
         logger.info("Starting Uvicorn server...")
         uvicorn.Server(config).run()
@@ -278,7 +396,3 @@ def launch(model_path, model_type, context_length, port, host, max_concurrency, 
     except Exception as e:
         logger.error(f"Server startup failed: {str(e)}")
         sys.exit(1)
-
-
-if __name__ == "__main__":
-    cli()
