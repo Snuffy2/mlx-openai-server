@@ -1,13 +1,8 @@
-import logging
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+import logging
+from typing import Any
 
-from openai_harmony import (
-    HarmonyEncodingName,
-    Role,
-    StreamableParser,
-    load_harmony_encoding,
-)
+from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +61,7 @@ class HarmonyParser:
         self._current_function_name = None
         self._function_arguments = []
 
-    def parse_stream(self, text: Optional[str] = None) -> Tuple[Optional[Any], bool]:
+    def parse_stream(self, text: str | None = None) -> tuple[Any | None, bool]:
         """
         Parse streaming text input and return parsing state and extracted content.
 
@@ -97,11 +92,11 @@ class HarmonyParser:
             text_tokens = self.enc.encode(text, allowed_special="all")
 
             # Initialize local variables for this chunk
-            contents: List[str] = []
-            function_name: Optional[str] = None
-            function_arguments: List[str] = []
-            reasoning_content: List[str] = []
-            current_channel: Optional[str] = None
+            contents: list[str] = []
+            function_name: str | None = None
+            function_arguments: list[str] = []
+            reasoning_content: list[str] = []
+            current_channel: str | None = None
 
             # Process each token
             for text_token in text_tokens:
@@ -116,9 +111,7 @@ class HarmonyParser:
                     # Handle different channels
                     if current_channel == ChannelType.ANALYSIS.value:
                         reasoning_content.append(content)
-                        self._accumulated_content[ChannelType.ANALYSIS.value].append(
-                            content
-                        )
+                        self._accumulated_content[ChannelType.ANALYSIS.value].append(content)
 
                     elif current_channel == ChannelType.COMMENTARY.value:
                         self.parsing_state = ParsingState.TOOL_PARSING
@@ -143,14 +136,10 @@ class HarmonyParser:
 
                     elif current_channel == ChannelType.FINAL.value:
                         contents.append(content)
-                        self._accumulated_content[ChannelType.FINAL.value].append(
-                            content
-                        )
+                        self._accumulated_content[ChannelType.FINAL.value].append(content)
 
                 except Exception as token_error:
-                    logger.warning(
-                        f"Error processing token {text_token}: {token_error}"
-                    )
+                    logger.warning(f"Error processing token {text_token}: {token_error}")
                     continue
 
             # Return appropriate response based on current channel
@@ -169,8 +158,8 @@ class HarmonyParser:
             return None, self.end_stream
 
     def _build_response(
-        self, current_channel: Optional[str], content_data: Dict[str, Any]
-    ) -> Tuple[Optional[Union[Dict[str, Any], str]], bool]:
+        self, current_channel: str | None, content_data: dict[str, Any]
+    ) -> tuple[dict[str, Any] | str | None, bool]:
         """
         Build the appropriate response based on the current channel.
 
@@ -190,9 +179,7 @@ class HarmonyParser:
             if current_channel == ChannelType.ANALYSIS.value:
                 reasoning_content = content_data.get("reasoning_content", [])
                 if reasoning_content:
-                    return {
-                        "reasoning_content": "".join(reasoning_content)
-                    }, self.end_stream
+                    return {"reasoning_content": "".join(reasoning_content)}, self.end_stream
 
             elif current_channel == ChannelType.COMMENTARY.value:
                 function_name = content_data.get("function_name")
@@ -221,7 +208,7 @@ class HarmonyParser:
         logger.debug("Resetting harmony parser state")
         self._reset_state()
 
-    def get_accumulated_content(self, channel: Optional[str] = None) -> Dict[str, str]:
+    def get_accumulated_content(self, channel: str | None = None) -> dict[str, str]:
         """
         Get accumulated content for all channels or a specific channel.
 
@@ -235,12 +222,10 @@ class HarmonyParser:
             return {channel: "".join(self._accumulated_content[channel])}
 
         return {
-            ch: "".join(content)
-            for ch, content in self._accumulated_content.items()
-            if content
+            ch: "".join(content) for ch, content in self._accumulated_content.items() if content
         }
 
-    def parse(self, text: str) -> Dict[str, Any]:
+    def parse(self, text: str) -> dict[str, Any]:
         """
         Parse complete text response and extract structured content.
 
@@ -271,9 +256,7 @@ class HarmonyParser:
             clean_text = text
             if self.end_tool_chunk in text:
                 clean_text = text.split(self.end_tool_chunk)[0]
-                logger.debug(
-                    f"Removed end tool chunk, processing {len(clean_text)} characters"
-                )
+                logger.debug(f"Removed end tool chunk, processing {len(clean_text)} characters")
 
             # Encode and parse messages
             tokens = self.enc.encode(clean_text, allowed_special="all")
@@ -284,9 +267,7 @@ class HarmonyParser:
             # Process each parsed message
             for message in parsed_messages:
                 try:
-                    if not hasattr(message, "channel") or not hasattr(
-                        message, "content"
-                    ):
+                    if not hasattr(message, "channel") or not hasattr(message, "content"):
                         logger.warning(f"Invalid message structure: {message}")
                         continue
 
@@ -302,7 +283,6 @@ class HarmonyParser:
                             and message.content
                             and len(message.content) > 0
                         ):
-
                             tool_call = {
                                 "name": message.recipient.replace("functions.", ""),
                                 "arguments": message.content[0].text,
@@ -337,7 +317,7 @@ class HarmonyParser:
         """Check if currently parsing tool calls."""
         return self.tool_state
 
-    def get_current_function_info(self) -> Dict[str, Optional[str]]:
+    def get_current_function_info(self) -> dict[str, str | None]:
         """
         Get information about the currently parsed function.
 
@@ -346,9 +326,7 @@ class HarmonyParser:
         """
         return {
             "name": self._current_function_name,
-            "arguments": (
-                "".join(self._function_arguments) if self._function_arguments else None
-            ),
+            "arguments": ("".join(self._function_arguments) if self._function_arguments else None),
         }
 
     def __repr__(self) -> str:

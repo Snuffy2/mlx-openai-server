@@ -1,7 +1,8 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 import gc
 import time
-from typing import Any, Awaitable, Callable, Dict, Generic, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 from loguru import logger
 
@@ -39,9 +40,7 @@ class RequestQueue:
     A simple asynchronous request queue with configurable concurrency.
     """
 
-    def __init__(
-        self, max_concurrency: int = 2, timeout: float = 300.0, queue_size: int = 100
-    ):
+    def __init__(self, max_concurrency: int = 2, timeout: float = 300.0, queue_size: int = 100):
         """
         Initialize the request queue.
 
@@ -55,7 +54,7 @@ class RequestQueue:
         self.queue_size = queue_size
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.queue = asyncio.Queue(maxsize=queue_size)
-        self.active_requests: Dict[str, RequestItem] = {}
+        self.active_requests: dict[str, RequestItem] = {}
         self._worker_task = None
         self._running = False
 
@@ -71,9 +70,7 @@ class RequestQueue:
 
         self._running = True
         self._worker_task = asyncio.create_task(self._worker_loop(processor))
-        logger.info(
-            f"Started request queue with max concurrency: {self.max_concurrency}"
-        )
+        logger.info(f"Started request queue with max concurrency: {self.max_concurrency}")
 
     async def stop(self):
         """Stop the queue worker."""
@@ -133,7 +130,7 @@ class RequestQueue:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in worker loop: {str(e)}")
+                logger.error(f"Error in worker loop: {e!s}")
 
     async def _process_request(
         self, request: RequestItem, processor: Callable[[Any], Awaitable[Any]]
@@ -150,28 +147,22 @@ class RequestQueue:
             try:
                 # Process with timeout
                 processing_start = time.time()
-                result = await asyncio.wait_for(
-                    processor(request.data), timeout=self.timeout
-                )
+                result = await asyncio.wait_for(processor(request.data), timeout=self.timeout)
                 processing_time = time.time() - processing_start
 
                 # Set the result
                 request.set_result(result)
-                logger.info(
-                    f"Request {request.request_id} processed in {processing_time:.2f}s"
-                )
+                logger.info(f"Request {request.request_id} processed in {processing_time:.2f}s")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 request.set_exception(
                     TimeoutError(f"Request processing timed out after {self.timeout}s")
                 )
-                logger.warning(
-                    f"Request {request.request_id} timed out after {self.timeout}s"
-                )
+                logger.warning(f"Request {request.request_id} timed out after {self.timeout}s")
 
             except Exception as e:
                 request.set_exception(e)
-                logger.error(f"Error processing request {request.request_id}: {str(e)}")
+                logger.error(f"Error processing request {request.request_id}: {e!s}")
 
             finally:
                 # Always remove from active requests, even if an error occurred
@@ -213,17 +204,16 @@ class RequestQueue:
         try:
             # This will raise QueueFull if the queue is full
             await asyncio.wait_for(
-                self.queue.put(request), timeout=1.0  # Short timeout for queue put
+                self.queue.put(request),
+                timeout=1.0,  # Short timeout for queue put
             )
             queue_time = time.time() - request.created_at
             logger.info(f"Request {request_id} queued (wait: {queue_time:.2f}s)")
             return request
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.active_requests.pop(request_id, None)
-            raise asyncio.QueueFull(
-                "Request queue is full and timed out waiting for space"
-            )
+            raise asyncio.QueueFull("Request queue is full and timed out waiting for space")
 
     async def submit(self, request_id: str, data: Any) -> Any:
         """
@@ -242,7 +232,7 @@ class RequestQueue:
         request = await self.enqueue(request_id, data)
         return await request.get_result()
 
-    def get_queue_stats(self) -> Dict[str, Any]:
+    def get_queue_stats(self) -> dict[str, Any]:
         """
         Get queue statistics.
 

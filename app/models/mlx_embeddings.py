@@ -1,5 +1,4 @@
 import gc
-from typing import List, Optional
 
 import mlx.core as mx
 from mlx_embeddings.utils import load
@@ -26,9 +25,9 @@ class MLX_Embeddings:
         try:
             self.model, self.tokenizer = load(model_path)
         except Exception as e:
-            raise ValueError(f"Error loading model: {str(e)}")
+            raise ValueError(f"Error loading model: {e!s}")
 
-    def _get_embeddings(self, texts: List[str], max_length: int = 512) -> mx.array:
+    def _get_embeddings(self, texts: list[str], max_length: int = 512) -> mx.array:
         """
         Get embeddings for a list of texts with proper memory management.
 
@@ -59,7 +58,7 @@ class MLX_Embeddings:
             # Return a copy to ensure the result persists after cleanup
             return mx.array(outputs)
 
-        except Exception as e:
+        except Exception:
             # Clean up on error
             self._cleanup_arrays(inputs, outputs)
             raise
@@ -85,7 +84,7 @@ class MLX_Embeddings:
         mx.clear_cache()
         gc.collect()
 
-    def __call__(self, texts: List[str], max_length: int = 512) -> List[List[float]]:
+    def __call__(self, texts: list[str], max_length: int = 512) -> list[list[float]]:
         """
         Generate embeddings for a list of texts.
 
@@ -105,7 +104,7 @@ class MLX_Embeddings:
             mx.clear_cache()
             gc.collect()
             return result
-        except Exception as e:
+        except Exception:
             # Clean up on error
             mx.clear_cache()
             gc.collect()
@@ -123,7 +122,7 @@ class MLX_Embeddings:
             # Clear MLX cache and force garbage collection
             mx.clear_cache()
             gc.collect()
-        except Exception as e:
+        except Exception:
             # Log cleanup errors but don't raise
             pass
 

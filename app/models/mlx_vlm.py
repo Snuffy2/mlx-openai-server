@@ -1,5 +1,5 @@
+from collections.abc import Generator
 import os
-from typing import Dict, Generator, List, Union
 
 import mlx.core as mx
 from mlx_vlm import generate, load, stream_generate
@@ -44,25 +44,23 @@ class MLX_VLM:
             self.max_kv_size = context_length
             self.config = self.model.config
         except Exception as e:
-            raise ValueError(f"Error loading model: {str(e)}")
+            raise ValueError(f"Error loading model: {e!s}")
 
     def _is_video_model(self):
-        return hasattr(self.config, "video_token_id") or hasattr(
-            self.config, "video_token_index"
-        )
+        return hasattr(self.config, "video_token_id") or hasattr(self.config, "video_token_index")
 
     def get_model_type(self):
         return self.config.model_type
 
     def __call__(
         self,
-        messages: List[Dict[str, str]],
-        images: List[str] = None,
-        audios: List[str] = None,
-        videos: List[str] = None,
+        messages: list[dict[str, str]],
+        images: list[str] = None,
+        audios: list[str] = None,
+        videos: list[str] = None,
         stream: bool = False,
         **kwargs,
-    ) -> Union[str, Generator[str, None, None]]:
+    ) -> str | Generator[str, None, None]:
         """
         Generate text response from images and messages.
 
@@ -79,9 +77,7 @@ class MLX_VLM:
         """
 
         if images and videos:
-            raise ValueError(
-                "Cannot process both images and videos in the same request"
-            )
+            raise ValueError("Cannot process both images and videos in the same request")
 
         if videos and not self._is_video_model():
             raise ValueError("Model is not a video model")
@@ -127,14 +123,13 @@ class MLX_VLM:
                 prompt_cache=prompt_cache,
                 **model_params,
             )
-        else:
-            return generate(
-                self.model,
-                self.processor,
-                prompt=text,
-                prompt_cache=prompt_cache,
-                **model_params,
-            )
+        return generate(
+            self.model,
+            self.processor,
+            prompt=text,
+            prompt_cache=prompt_cache,
+            **model_params,
+        )
 
 
 if __name__ == "__main__":

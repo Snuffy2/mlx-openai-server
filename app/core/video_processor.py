@@ -1,7 +1,6 @@
 import asyncio
 import gc
 import os
-from typing import List
 
 from loguru import logger
 
@@ -23,9 +22,9 @@ class VideoProcessor(BaseProcessor):
             mime_type = media_url.split(";")[0].split(":")[1]
             if "mp4" in mime_type:
                 return "mp4"
-            elif "quicktime" in mime_type or "mov" in mime_type:
+            if "quicktime" in mime_type or "mov" in mime_type:
                 return "mov"
-            elif "x-msvideo" in mime_type or "avi" in mime_type:
+            if "x-msvideo" in mime_type or "avi" in mime_type:
                 return "avi"
         else:
             # Extract format from file extension
@@ -100,7 +99,7 @@ class VideoProcessor(BaseProcessor):
             self._cleanup_old_files()
             return cached_path
         except Exception as e:
-            logger.error(f"Failed to save video data: {str(e)}")
+            logger.error(f"Failed to save video data: {e!s}")
             raise
 
     def _get_media_type_name(self) -> str:
@@ -124,7 +123,7 @@ class VideoProcessor(BaseProcessor):
         """
         return await self._process_single_media(video_url)
 
-    async def process_video_urls(self, video_urls: List[str]) -> List[str]:
+    async def process_video_urls(self, video_urls: list[str]) -> list[str]:
         """
         Process multiple video URLs and return paths to cached files.
 

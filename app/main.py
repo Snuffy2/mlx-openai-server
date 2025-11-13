@@ -1,15 +1,15 @@
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 import gc
 import time
-from contextlib import asynccontextmanager
 
-import mlx.core as mx
-import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
+import mlx.core as mx
+import uvicorn
 
 from app.api.endpoints import router
 from app.handler import MFLUX_AVAILABLE, MLXFluxHandler
@@ -77,21 +77,15 @@ def parse_args():
         default=32768,
         help="Context length for language models. Only works with `lm` or `multimodal` model types.",
     )
-    parser.add_argument(
-        "--port", type=int, default=8000, help="Port to run the server on"
-    )
-    parser.add_argument(
-        "--host", type=str, default="0.0.0.0", help="Host to run the server on"
-    )
+    parser.add_argument("--port", type=int, default=8000, help="Port to run the server on")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to run the server on")
     parser.add_argument(
         "--max-concurrency",
         type=int,
         default=1,
         help="Maximum number of concurrent requests",
     )
-    parser.add_argument(
-        "--queue-timeout", type=int, default=300, help="Request timeout in seconds"
-    )
+    parser.add_argument("--queue-timeout", type=int, default=300, help="Request timeout in seconds")
     parser.add_argument(
         "--queue-size",
         type=int,
@@ -205,25 +199,17 @@ def create_lifespan(config_args):
         try:
             model_identifier = get_model_identifier(config_args)
             if config_args.model_type == "image-generation":
-                logger.info(
-                    f"Initializing MLX handler with model name: {model_identifier}"
-                )
+                logger.info(f"Initializing MLX handler with model name: {model_identifier}")
             else:
-                logger.info(
-                    f"Initializing MLX handler with model path: {model_identifier}"
-                )
+                logger.info(f"Initializing MLX handler with model path: {model_identifier}")
 
             if config_args.model_type == "multimodal":
                 handler = MLXVLMHandler(
                     model_path=model_identifier,
                     context_length=getattr(config_args, "context_length", None),
                     max_concurrency=config_args.max_concurrency,
-                    disable_auto_resize=getattr(
-                        config_args, "disable_auto_resize", False
-                    ),
-                    enable_auto_tool_choice=getattr(
-                        config_args, "enable_auto_tool_choice", False
-                    ),
+                    disable_auto_resize=getattr(config_args, "disable_auto_resize", False),
+                    enable_auto_tool_choice=getattr(config_args, "enable_auto_tool_choice", False),
                     tool_call_parser=getattr(config_args, "tool_call_parser", None),
                     reasoning_parser=getattr(config_args, "reasoning_parser", None),
                     trust_remote_code=getattr(config_args, "trust_remote_code", False),
@@ -233,7 +219,7 @@ def create_lifespan(config_args):
                     raise ValueError(
                         "Image generation requires mflux. Install with: pip install git+https://github.com/cubist38/mflux.git"
                     )
-                if not config_args.config_name in [
+                if config_args.config_name not in [
                     "flux-schnell",
                     "flux-dev",
                     "flux-krea-dev",
@@ -281,9 +267,7 @@ def create_lifespan(config_args):
                     model_path=model_identifier,
                     context_length=getattr(config_args, "context_length", None),
                     max_concurrency=config_args.max_concurrency,
-                    enable_auto_tool_choice=getattr(
-                        config_args, "enable_auto_tool_choice", False
-                    ),
+                    enable_auto_tool_choice=getattr(config_args, "enable_auto_tool_choice", False),
                     tool_call_parser=getattr(config_args, "tool_call_parser", None),
                     reasoning_parser=getattr(config_args, "reasoning_parser", None),
                     trust_remote_code=getattr(config_args, "trust_remote_code", False),
@@ -300,7 +284,7 @@ def create_lifespan(config_args):
             app.state.handler = handler
 
         except Exception as e:
-            logger.error(f"Failed to initialize MLX handler: {str(e)}")
+            logger.error(f"Failed to initialize MLX handler: {e!s}")
             raise
 
         # Initial memory cleanup
@@ -318,7 +302,7 @@ def create_lifespan(config_args):
                 await app.state.handler.cleanup()
                 logger.info("Resources cleaned up successfully")
             except Exception as e:
-                logger.error(f"Error during shutdown: {str(e)}")
+                logger.error(f"Error during shutdown: {e!s}")
 
         # Final memory cleanup
         mx.clear_cache()
@@ -385,12 +369,10 @@ async def setup_server(args) -> uvicorn.Config:
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        logger.error(f"Global exception handler caught: {str(exc)}", exc_info=True)
+        logger.error(f"Global exception handler caught: {exc!s}", exc_info=True)
         return JSONResponse(
             status_code=500,
-            content={
-                "error": {"message": "Internal server error", "type": "internal_error"}
-            },
+            content={"error": {"message": "Internal server error", "type": "internal_error"}},
         )
 
     logger.info(f"Starting server on {args.host}:{args.port}")

@@ -1,16 +1,16 @@
 import asyncio
 import base64
 import gc
+from http import HTTPStatus
 import io
+from io import BytesIO
 import os
 import tempfile
 import time
+from typing import Any
 import uuid
-from http import HTTPStatus
-from io import BytesIO
-from typing import Any, Dict, List, Optional
 
-from fastapi import HTTPException, UploadFile
+from fastapi import HTTPException
 from loguru import logger
 from PIL import Image
 
@@ -39,8 +39,8 @@ class MLXFluxHandler:
         max_concurrency: int = 1,
         quantize: int = 8,
         config_name: str = "flux-schnell",
-        lora_paths: Optional[List[str]] = None,
-        lora_scales: Optional[List[float]] = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ):
         """
         Initialize the handler with the specified model path.
@@ -66,9 +66,7 @@ class MLXFluxHandler:
             lora_paths=lora_paths,
             lora_scales=lora_scales,
         )
-        self.model_created = int(
-            time.time()
-        )  # Store creation time when model is loaded
+        self.model_created = int(time.time())  # Store creation time when model is loaded
 
         # Initialize request queue for image generation tasks
         self.request_queue = RequestQueue(max_concurrency=max_concurrency)
@@ -79,7 +77,7 @@ class MLXFluxHandler:
         if lora_paths:
             logger.info(f"Using LoRA adapters: {lora_paths} with scales: {lora_scales}")
 
-    async def get_models(self) -> List[Dict[str, Any]]:
+    async def get_models(self) -> list[dict[str, Any]]:
         """
         Get list of available models with their metadata.
         """
@@ -93,10 +91,10 @@ class MLXFluxHandler:
                 }
             ]
         except Exception as e:
-            logger.error(f"Error getting models: {str(e)}")
+            logger.error(f"Error getting models: {e!s}")
             return []
 
-    async def initialize(self, queue_config: Optional[Dict[str, Any]] = None):
+    async def initialize(self, queue_config: dict[str, Any] | None = None):
         """Initialize the handler and start the request queue."""
         if not queue_config:
             queue_config = {"max_concurrency": 1, "timeout": 300, "queue_size": 100}
@@ -114,9 +112,7 @@ class MLXFluxHandler:
         width, height = map(int, size.value.split("x"))
         return width, height
 
-    async def generate_image(
-        self, request: ImageGenerationRequest
-    ) -> ImageGenerationResponse:
+    async def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
         """
         Generate an image based on the request parameters.
         Uses the request queue for handling concurrent requests.
@@ -166,19 +162,15 @@ class MLXFluxHandler:
             )
             raise HTTPException(status_code=429, detail=content)
         except Exception as e:
-            logger.error(
-                f"Error in image generation for request {request_id}: {str(e)}"
-            )
+            logger.error(f"Error in image generation for request {request_id}: {e!s}")
             content = create_error_response(
-                f"Failed to generate image: {str(e)}",
+                f"Failed to generate image: {e!s}",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             raise HTTPException(status_code=500, detail=content)
 
-    async def edit_image(
-        self, image_edit_request: ImageEditRequest
-    ) -> ImageEditResponse:
+    async def edit_image(self, image_edit_request: ImageEditRequest) -> ImageEditResponse:
         """
         Edit an image based on the request parameters.
 
@@ -198,15 +190,11 @@ class MLXFluxHandler:
             "image/jpeg",
             "image/jpg",
         ]:
-            raise HTTPException(
-                status_code=400, detail="Image must be a PNG, JPEG, or JPG file"
-            )
+            raise HTTPException(status_code=400, detail="Image must be a PNG, JPEG, or JPG file")
 
         # Check file size (limit to 10MB)
         if hasattr(image, "size") and image.size and image.size > 10 * 1024 * 1024:
-            raise HTTPException(
-                status_code=400, detail="Image file size must be less than 10MB"
-            )
+            raise HTTPException(status_code=400, detail="Image file size must be less than 10MB")
 
         # Validate request parameters
         if not image_edit_request.prompt or not image_edit_request.prompt.strip():
@@ -225,10 +213,8 @@ class MLXFluxHandler:
             try:
                 input_image = Image.open(io.BytesIO(image_data)).convert("RGB")
             except Exception as img_error:
-                logger.error(f"Failed to process image: {str(img_error)}")
-                raise HTTPException(
-                    status_code=400, detail="Invalid or corrupted image file"
-                )
+                logger.error(f"Failed to process image: {img_error!s}")
+                raise HTTPException(status_code=400, detail="Invalid or corrupted image file")
 
             width, height = input_image.size
             if image_edit_request.size is not None:
@@ -243,10 +229,8 @@ class MLXFluxHandler:
                 input_image.save(temp_file_path, format="PNG")
                 temp_file.close()
             except Exception as temp_error:
-                logger.error(f"Failed to create temporary file: {str(temp_error)}")
-                raise HTTPException(
-                    status_code=500, detail="Failed to process image for editing"
-                )
+                logger.error(f"Failed to create temporary file: {temp_error!s}")
+                raise HTTPException(status_code=500, detail="Failed to process image for editing")
 
             # Prepare request data with all necessary parameters
             request_data = {
@@ -291,11 +275,9 @@ class MLXFluxHandler:
             raise
 
         except Exception as e:
-            logger.error(
-                f"Unexpected error in image edit for request {request_id}: {str(e)}"
-            )
+            logger.error(f"Unexpected error in image edit for request {request_id}: {e!s}")
             content = create_error_response(
-                f"Failed to edit image: {str(e)}",
+                f"Failed to edit image: {e!s}",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
@@ -309,7 +291,7 @@ class MLXFluxHandler:
                     logger.debug(f"Cleaned up temporary file: {temp_file_path}")
                 except OSError as cleanup_error:
                     logger.warning(
-                        f"Failed to cleanup temporary file {temp_file_path}: {str(cleanup_error)}"
+                        f"Failed to cleanup temporary file {temp_file_path}: {cleanup_error!s}"
                     )
 
             # Force garbage collection to free memory
@@ -331,7 +313,7 @@ class MLXFluxHandler:
         image_data = buffer.getvalue()
         return base64.b64encode(image_data).decode("utf-8")
 
-    async def _process_request(self, request_data: Dict[str, Any]) -> Image.Image:
+    async def _process_request(self, request_data: dict[str, Any]) -> Image.Image:
         """
         Process an image generation request. This is the worker function for the request queue.
 
@@ -374,7 +356,7 @@ class MLXFluxHandler:
                 logger.info(f"Generating image with prompt: {prompt[:50]}...")
 
             # Log all model parameters
-            logger.info(f"Model inference configurations:")
+            logger.info("Model inference configurations:")
             logger.info(f"  - Prompt: {prompt[:100]}...")
             logger.info(f"  - Negative prompt: {negative_prompt}")
             logger.info(f"  - Steps: {steps}")
@@ -393,12 +375,12 @@ class MLXFluxHandler:
             return image
 
         except Exception as e:
-            logger.error(f"Error processing image generation request: {str(e)}")
+            logger.error(f"Error processing image generation request: {e!s}")
             # Clean up on error
             gc.collect()
             raise
 
-    async def get_queue_stats(self) -> Dict[str, Any]:
+    async def get_queue_stats(self) -> dict[str, Any]:
         """
         Get current queue statistics.
 
@@ -431,7 +413,7 @@ class MLXFluxHandler:
                 await self.request_queue.stop()
                 logger.info("Request queue stopped successfully")
         except Exception as e:
-            logger.error(f"Error during MLXFluxHandler cleanup: {str(e)}")
+            logger.error(f"Error during MLXFluxHandler cleanup: {e!s}")
 
         # Force garbage collection
         gc.collect()

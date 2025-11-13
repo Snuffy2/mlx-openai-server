@@ -1,8 +1,8 @@
 from functools import lru_cache
 
 import librosa
-import numpy as np
 from mlx_whisper.transcribe import transcribe
+import numpy as np
 
 SAMPLING_RATE = 16000
 CHUNK_SIZE = 30
@@ -64,8 +64,7 @@ class MLX_Whisper:
         """
         if stream:
             return self._transcribe_generator(audio_path, **kwargs)
-        else:
-            return transcribe(audio_path, path_or_hf_repo=self.model_path, **kwargs)
+        return transcribe(audio_path, path_or_hf_repo=self.model_path, **kwargs)
 
 
 if __name__ == "__main__":
@@ -73,6 +72,4 @@ if __name__ == "__main__":
     # Non-streaming (fastest for most use cases)
     result = model("examples/audios/podcast.wav", stream=True)
     for chunk in result:
-        print(
-            f"[{chunk['chunk_start']:.1f}s - {chunk['chunk_end']:.1f}s]: {chunk['text']}"
-        )
+        print(f"[{chunk['chunk_start']:.1f}s - {chunk['chunk_end']:.1f}s]: {chunk['text']}")

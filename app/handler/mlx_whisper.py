@@ -1,11 +1,12 @@
+from collections.abc import AsyncGenerator
 import gc
+from http import HTTPStatus
 import json
 import os
 import tempfile
 import time
+from typing import Any
 import uuid
-from http import HTTPStatus
-from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import HTTPException
 from loguru import logger
@@ -40,16 +41,14 @@ class MLXWhisperHandler:
         """
         self.model_path = model_path
         self.model = MLX_Whisper(model_path)
-        self.model_created = int(
-            time.time()
-        )  # Store creation time when model is loaded
+        self.model_created = int(time.time())  # Store creation time when model is loaded
 
         # Initialize request queue for audio transcription tasks
         self.request_queue = RequestQueue(max_concurrency=max_concurrency)
 
         logger.info(f"Initialized MLXWhisperHandler with model path: {model_path}")
 
-    async def get_models(self) -> List[Dict[str, Any]]:
+    async def get_models(self) -> list[dict[str, Any]]:
         """
         Get list of available models with their metadata.
         """
@@ -63,10 +62,10 @@ class MLXWhisperHandler:
                 }
             ]
         except Exception as e:
-            logger.error(f"Error getting models: {str(e)}")
+            logger.error(f"Error getting models: {e!s}")
             return []
 
-    async def initialize(self, queue_config: Optional[Dict[str, Any]] = None):
+    async def initialize(self, queue_config: dict[str, Any] | None = None):
         """Initialize the handler and start the request queue."""
         if not queue_config:
             queue_config = {
@@ -104,9 +103,8 @@ class MLXWhisperHandler:
             )
             if request.response_format == TranscriptionResponseFormat.JSON:
                 return response_data
-            else:
-                # dump to string for text response
-                return json.dumps(response_data.model_dump())
+            # dump to string for text response
+            return json.dumps(response_data.model_dump())
         finally:
             # Clean up temporary file
             if temp_file_path and os.path.exists(temp_file_path):
@@ -114,14 +112,12 @@ class MLXWhisperHandler:
                     os.unlink(temp_file_path)
                     logger.debug(f"Cleaned up temporary file: {temp_file_path}")
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to clean up temporary file {temp_file_path}: {str(e)}"
-                    )
+                    logger.warning(f"Failed to clean up temporary file {temp_file_path}: {e!s}")
             # Force garbage collection
             gc.collect()
 
     async def generate_transcription_stream_from_data(
-        self, request_data: Dict[str, Any], response_format: TranscriptionResponseFormat
+        self, request_data: dict[str, Any], response_format: TranscriptionResponseFormat
     ) -> AsyncGenerator[str, None]:
         """
         Generate a transcription stream from prepared request data.
@@ -140,9 +136,7 @@ class MLXWhisperHandler:
             request_data["stream"] = True
 
             # Get the generator directly from the model (bypass queue for streaming)
-            generator = self.model(
-                audio_path=request_data.pop("audio_path"), **request_data
-            )
+            generator = self.model(audio_path=request_data.pop("audio_path"), **request_data)
 
             # Stream each chunk
             for chunk in generator:
@@ -170,16 +164,14 @@ class MLXWhisperHandler:
                 created=created_time,
                 model=self.model_path,
                 choices=[
-                    TranscriptionResponseStreamChoice(
-                        delta=Delta(content=""), finish_reason="stop"
-                    )
+                    TranscriptionResponseStreamChoice(delta=Delta(content=""), finish_reason="stop")
                 ],
             )
             yield f"data: {final_response.model_dump_json()}\n\n"
             yield "data: [DONE]\n\n"
 
         except Exception as e:
-            logger.error(f"Error during transcription streaming: {str(e)}")
+            logger.error(f"Error during transcription streaming: {e!s}")
             raise
         finally:
             # Clean up temporary file
@@ -188,13 +180,11 @@ class MLXWhisperHandler:
                     os.unlink(temp_file_path)
                     logger.debug(f"Cleaned up temporary file: {temp_file_path}")
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to clean up temporary file {temp_file_path}: {str(e)}"
-                    )
+                    logger.warning(f"Failed to clean up temporary file {temp_file_path}: {e!s}")
             # Clean up
             gc.collect()
 
-    async def _process_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_request(self, request_data: dict[str, Any]) -> dict[str, Any]:
         """
         Process an audio transcription request. This is the worker function for the request queue.
 
@@ -217,7 +207,7 @@ class MLXWhisperHandler:
             return result
 
         except Exception as e:
-            logger.error(f"Error processing audio transcription request: {str(e)}")
+            logger.error(f"Error processing audio transcription request: {e!s}")
             # Clean up on error
             gc.collect()
             raise
@@ -234,9 +224,7 @@ class MLXWhisperHandler:
         """
         try:
             # Create a temporary file with the same extension as the uploaded file
-            file_extension = (
-                os.path.splitext(file.filename)[1] if file.filename else ".wav"
-            )
+            file_extension = os.path.splitext(file.filename)[1] if file.filename else ".wav"
 
             print("file_extension", file_extension)
 
@@ -244,9 +232,7 @@ class MLXWhisperHandler:
             content = await file.read()
 
             # Create temporary file
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=file_extension
-            ) as temp_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
                 # Write the file contents
                 temp_file.write(content)
                 temp_path = temp_file.name
@@ -255,12 +241,10 @@ class MLXWhisperHandler:
             return temp_path
 
         except Exception as e:
-            logger.error(f"Error saving uploaded file: {str(e)}")
+            logger.error(f"Error saving uploaded file: {e!s}")
             raise
 
-    async def _prepare_transcription_request(
-        self, request: TranscriptionRequest
-    ) -> Dict[str, Any]:
+    async def _prepare_transcription_request(self, request: TranscriptionRequest) -> dict[str, Any]:
         """
         Prepare a transcription request by parsing model parameters.
 
@@ -272,7 +256,6 @@ class MLXWhisperHandler:
             Dict containing the request data ready for the model.
         """
         try:
-
             file = request.file
 
             file_path = await self._save_uploaded_file(file)
@@ -304,15 +287,15 @@ class MLXWhisperHandler:
             return request_data
 
         except Exception as e:
-            logger.error(f"Failed to prepare transcription request: {str(e)}")
+            logger.error(f"Failed to prepare transcription request: {e!s}")
             content = create_error_response(
-                f"Failed to process request: {str(e)}",
+                f"Failed to process request: {e!s}",
                 "bad_request",
                 HTTPStatus.BAD_REQUEST,
             )
             raise HTTPException(status_code=400, detail=content)
 
-    async def get_queue_stats(self) -> Dict[str, Any]:
+    async def get_queue_stats(self) -> dict[str, Any]:
         """
         Get statistics from the request queue and performance metrics.
 
@@ -338,5 +321,5 @@ class MLXWhisperHandler:
                 await self.request_queue.stop()
             logger.info("MLXWhisperHandler cleanup completed successfully")
         except Exception as e:
-            logger.error(f"Error during MLXWhisperHandler cleanup: {str(e)}")
+            logger.error(f"Error during MLXWhisperHandler cleanup: {e!s}")
             raise

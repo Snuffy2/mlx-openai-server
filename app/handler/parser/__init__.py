@@ -1,8 +1,4 @@
-from app.handler.parser.base import (
-    BaseMessageConverter,
-    BaseThinkingParser,
-    BaseToolParser,
-)
+from app.handler.parser.base import BaseMessageConverter, BaseThinkingParser, BaseToolParser
 from app.handler.parser.factory import ParserFactory
 from app.handler.parser.glm4_moe import Glm4MoEThinkingParser, Glm4MoEToolParser
 from app.handler.parser.harmony import HarmonyParser

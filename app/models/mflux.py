@@ -1,7 +1,7 @@
+from abc import ABC, abstractmethod
 import logging
 import os
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any
 
 from mflux.config.model_config import ModelConfig
 from mflux.flux.flux import Config, Flux1
@@ -13,25 +13,17 @@ from PIL import Image
 class FluxModelError(Exception):
     """Base exception for Flux model errors."""
 
-    pass
-
 
 class ModelLoadError(FluxModelError):
     """Raised when model loading fails."""
-
-    pass
 
 
 class ModelGenerationError(FluxModelError):
     """Raised when image generation fails."""
 
-    pass
-
 
 class InvalidConfigurationError(FluxModelError):
     """Raised when configuration is invalid."""
-
-    pass
 
 
 class ModelConfiguration:
@@ -40,14 +32,13 @@ class ModelConfiguration:
     def __init__(
         self,
         model_type: str,
-        model_config: Optional[ModelConfig] = None,
+        model_config: ModelConfig | None = None,
         quantize: int = 8,
         default_steps: int = 20,
         default_guidance: float = 2.5,
-        lora_paths: Optional[List[str]] = None,
-        lora_scales: Optional[List[float]] = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ):
-
         # Validate quantization level
         if quantize not in [4, 8, 16]:
             raise InvalidConfigurationError(
@@ -76,8 +67,8 @@ class ModelConfiguration:
     def schnell(
         cls,
         quantize: int = 8,
-        lora_paths: Optional[List[str]] = None,
-        lora_scales: Optional[List[float]] = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ) -> "ModelConfiguration":
         """Create configuration for Flux Schnell model."""
         return cls(
@@ -94,8 +85,8 @@ class ModelConfiguration:
     def dev(
         cls,
         quantize: int = 8,
-        lora_paths: Optional[List[str]] = None,
-        lora_scales: Optional[List[float]] = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ) -> "ModelConfiguration":
         """Create configuration for Flux Dev model."""
         return cls(
@@ -112,8 +103,8 @@ class ModelConfiguration:
     def krea_dev(
         cls,
         quantize: int = 8,
-        lora_paths: Optional[List[str]] = None,
-        lora_scales: Optional[List[float]] = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ) -> "ModelConfiguration":
         """Create configuration for Flux Krea Dev model."""
         return cls(
@@ -169,12 +160,10 @@ class BaseFluxModel(ABC):
     @abstractmethod
     def _load_model(self):
         """Load the specific model implementation."""
-        pass
 
     @abstractmethod
     def _generate_image(self, prompt: str, seed: int, config: Config) -> Image.Image:
         """Generate image using the specific model implementation."""
-        pass
 
     def __call__(self, prompt: str, seed: int = 42, **kwargs) -> Image.Image:
         """Generate an image from a text prompt."""
@@ -225,9 +214,7 @@ class BaseFluxModel(ABC):
         # Validate steps
         steps = kwargs.get("num_inference_steps", self.config.default_steps)
         if not isinstance(steps, int) or steps <= 0:
-            raise ModelGenerationError(
-                "Number of inference steps must be a positive integer."
-            )
+            raise ModelGenerationError("Number of inference steps must be a positive integer.")
 
         # Validate guidance
         guidance = kwargs.get("guidance", self.config.default_guidance)
@@ -257,9 +244,7 @@ class FluxStandardModel(BaseFluxModel):
     def _load_model(self):
         """Load the standard Flux model."""
         try:
-            self.logger.info(
-                f"Loading {self.config.model_type} model from {self.model_path}"
-            )
+            self.logger.info(f"Loading {self.config.model_type} model from {self.model_path}")
 
             # Prepare lora parameters
             lora_paths = self.config.lora_paths
@@ -305,9 +290,7 @@ class FluxKontextModel(BaseFluxModel):
         """Load the Flux Kontext model."""
         try:
             self.logger.info(f"Loading Kontext model from {self.model_path}")
-            self._model = Flux1Kontext(
-                quantize=self.config.quantize, local_path=self.model_path
-            )
+            self._model = Flux1Kontext(quantize=self.config.quantize, local_path=self.model_path)
             self._is_loaded = True
             self.logger.info("Kontext model loaded successfully")
         except Exception as e:
@@ -350,10 +333,9 @@ class FluxModel:
         model_path: str,
         config_name: str,
         quantize: int = 8,
-        lora_paths: Optional[List[str]] = None,
-        lora_scales: Optional[List[float]] = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ):
-
         self.config_name = config_name
         self.model_path = model_path
         self.quantize = quantize
@@ -372,9 +354,7 @@ class FluxModel:
         if config_name == "flux-kontext-dev" and (
             lora_paths is not None or lora_scales is not None
         ):
-            raise InvalidConfigurationError(
-                "Flux Kontext model does not support LoRA adapters"
-            )
+            raise InvalidConfigurationError("Flux Kontext model does not support LoRA adapters")
 
         try:
             # Create model configuration
@@ -390,9 +370,7 @@ class FluxModel:
             model_class = self._MODEL_CLASSES[config_name]
             self.flux = model_class(model_path, self.config)
 
-            self.logger.info(
-                f"FluxModel initialized successfully with config: {config_name}"
-            )
+            self.logger.info(f"FluxModel initialized successfully with config: {config_name}")
             if lora_paths:
                 self.logger.info(f"LoRA adapters: {lora_paths}")
 
@@ -411,7 +389,7 @@ class FluxModel:
         return list(cls._MODEL_CONFIGS.keys())
 
     @classmethod
-    def get_model_info(cls, config_name: str) -> Dict[str, Any]:
+    def get_model_info(cls, config_name: str) -> dict[str, Any]:
         """Get information about a specific model configuration."""
         if config_name not in cls._MODEL_CONFIGS:
             raise InvalidConfigurationError(f"Unknown config: {config_name}")
@@ -425,7 +403,7 @@ class FluxModel:
             "model_class": cls._MODEL_CLASSES[config_name].__name__,
         }
 
-    def get_current_config(self) -> Dict[str, Any]:
+    def get_current_config(self) -> dict[str, Any]:
         """Get current model configuration information."""
         return {
             "config_name": self.config_name,
@@ -434,9 +412,7 @@ class FluxModel:
             "type": self.config.model_type,
             "default_steps": self.config.default_steps,
             "default_guidance": self.config.default_guidance,
-            "is_loaded": (
-                self.flux._is_loaded if hasattr(self.flux, "_is_loaded") else False
-            ),
+            "is_loaded": (self.flux._is_loaded if hasattr(self.flux, "_is_loaded") else False),
             "lora_paths": self.config.lora_paths,
             "lora_scales": self.config.lora_scales,
         }

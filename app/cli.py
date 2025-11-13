@@ -1,10 +1,10 @@
 import asyncio
-import sys
 from functools import lru_cache
+import sys
 
 import click
-import uvicorn
 from loguru import logger
+import uvicorn
 
 from app.handler.parser.factory import PARSER_REGISTRY
 from app.main import setup_server
@@ -58,17 +58,13 @@ class Config:
 
         # Process comma-separated LoRA paths and scales
         if lora_paths:
-            self.lora_paths = [
-                path.strip() for path in lora_paths.split(",") if path.strip()
-            ]
+            self.lora_paths = [path.strip() for path in lora_paths.split(",") if path.strip()]
         else:
             self.lora_paths = None
 
         if lora_scales:
             self.lora_scales = [
-                float(scale.strip())
-                for scale in lora_scales.split(",")
-                if scale.strip()
+                float(scale.strip()) for scale in lora_scales.split(",") if scale.strip()
             ]
         else:
             self.lora_scales = None
@@ -104,7 +100,6 @@ logger.add(
 )
 def cli():
     """MLX Server - OpenAI Compatible API for MLX models."""
-    pass
 
 
 @lru_cache(maxsize=1)
@@ -181,21 +176,21 @@ def print_startup_banner(args):
         and args.disable_auto_resize
         and args.model_type == "multimodal"
     ):
-        logger.info(f"🖼️ Auto-resize: Disabled")
+        logger.info("🖼️ Auto-resize: Disabled")
     if args.model_type in ["lm", "multimodal"]:
         if args.enable_auto_tool_choice:
-            logger.info(f"🔧 Auto Tool Choice: Enabled")
+            logger.info("🔧 Auto Tool Choice: Enabled")
         if args.tool_call_parser:
             logger.info(f"🔧 Tool Call Parser: {args.tool_call_parser}")
         if args.reasoning_parser:
             logger.info(f"🔧 Reasoning Parser: {args.reasoning_parser}")
     logger.info(f"📝 Log Level: {args.log_level}")
     if args.no_log_file:
-        logger.info(f"📝 File Logging: Disabled")
+        logger.info("📝 File Logging: Disabled")
     elif args.log_file:
         logger.info(f"📝 Log File: {args.log_file}")
     else:
-        logger.info(f"📝 Log File: logs/app.log (default)")
+        logger.info("📝 Log File: logs/app.log (default)")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 
@@ -226,9 +221,7 @@ def print_startup_banner(args):
     type=int,
     help="Maximum number of concurrent requests",
 )
-@click.option(
-    "--queue-timeout", default=300, type=int, help="Request timeout in seconds"
-)
+@click.option("--queue-timeout", default=300, type=int, help="Request timeout in seconds")
 @click.option(
     "--queue-size",
     default=100,
@@ -244,9 +237,7 @@ def print_startup_banner(args):
 @click.option(
     "--config-name",
     default=None,
-    type=click.Choice(
-        ["flux-schnell", "flux-dev", "flux-krea-dev", "flux-kontext-dev"]
-    ),
+    type=click.Choice(["flux-schnell", "flux-dev", "flux-krea-dev", "flux-kontext-dev"]),
     help="Config name of the model. Only used for image-generation and image-edit Flux models.",
 )
 @click.option(
@@ -380,7 +371,7 @@ def launch(
     except KeyboardInterrupt:
         logger.info("Server shutdown requested by user. Exiting...")
     except Exception as e:
-        logger.error(f"Server startup failed: {str(e)}")
+        logger.error(f"Server startup failed: {e!s}")
         sys.exit(1)
 
 

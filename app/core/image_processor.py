@@ -1,7 +1,6 @@
 import asyncio
 import gc
 from io import BytesIO
-from typing import List
 
 from loguru import logger
 from PIL import Image
@@ -86,7 +85,7 @@ class ImageProcessor(BaseProcessor):
             else:
                 background.paste(image, mask=image.split()[1])
             return background
-        elif image.mode != "RGB":
+        if image.mode != "RGB":
             return image.convert("RGB")
         return image
 
@@ -115,9 +114,7 @@ class ImageProcessor(BaseProcessor):
         """Process a single image URL and return path to cached file."""
         return await self._process_single_media(image_url, resize=resize)
 
-    async def process_image_urls(
-        self, image_urls: List[str], resize: bool = True
-    ) -> List[str]:
+    async def process_image_urls(self, image_urls: list[str], resize: bool = True) -> list[str]:
         """Process multiple image URLs and return paths to cached files."""
         tasks = [self.process_image_url(url, resize=resize) for url in image_urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)

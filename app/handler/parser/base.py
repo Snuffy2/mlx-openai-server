@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from json_repair import repair_json
 
@@ -16,7 +16,7 @@ class BaseThinkingParser:
     def get_thinking_close(self):
         return self.thinking_close
 
-    def parse(self, content: str) -> Tuple[Optional[str], str]:
+    def parse(self, content: str) -> tuple[str | None, str]:
         start_thinking = content.find(self.thinking_open)
         if start_thinking == -1:
             return None, content
@@ -33,7 +33,7 @@ class BaseThinkingParser:
         remaining_content = content[end_thinking + thinking_close_len :].strip()
         return thinking_content, remaining_content
 
-    def parse_stream(self, chunk: Optional[str] = None) -> Tuple[Optional[Any], bool]:
+    def parse_stream(self, chunk: str | None = None) -> tuple[Any | None, bool]:
         """
         Parse streaming chunks for thinking content.
 
@@ -60,9 +60,7 @@ class BaseThinkingParser:
                     # Return content before open tag + content after close tag
                     after_close = after_open[close_idx + len(self.thinking_close) :]
                     return (
-                        (before_open + after_close)
-                        if (before_open + after_close)
-                        else None
+                        (before_open + after_close) if (before_open + after_close) else None
                     ), True
 
                 # Only opening tag found, return content before it (if any) and reasoning content after
@@ -113,7 +111,7 @@ class BaseToolParser:
     def get_tool_close(self):
         return self.tool_close
 
-    def _parse_tool_content(self, tool_content: str) -> Optional[Dict[str, Any]]:
+    def _parse_tool_content(self, tool_content: str) -> dict[str, Any] | None:
         """
         Parses the content of a tool call. Subclasses can override this method
         to support different content formats (e.g., XML, YAML).
@@ -129,7 +127,7 @@ class BaseToolParser:
         except json.JSONDecodeError:
             raise
 
-    def parse(self, content: str) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    def parse(self, content: str) -> tuple[list[dict[str, Any]] | None, str]:
         tool_calls = []
         remaining_parts = []
 
@@ -177,7 +175,7 @@ class BaseToolParser:
         remaining_content = " ".join(filter(None, remaining_parts))
         return tool_calls, remaining_content
 
-    def parse_stream(self, chunk: Optional[str] = None) -> Tuple[Optional[Any], bool]:
+    def parse_stream(self, chunk: str | None = None) -> tuple[Any | None, bool]:
         """
         Parse streaming chunks for tool calls.
 
@@ -194,9 +192,7 @@ class BaseToolParser:
             start_tool_index = chunk.find(self.tool_open)
             end_tool_index = chunk.find(self.tool_close)
             if end_tool_index != -1:
-                self.buffer = chunk[
-                    start_tool_index + len(self.tool_open) : end_tool_index
-                ]
+                self.buffer = chunk[start_tool_index + len(self.tool_open) : end_tool_index]
                 self.state = ParseToolState.NORMAL
                 try:
                     json_output = self._parse_tool_content(self.buffer)
@@ -225,9 +221,8 @@ class BaseToolParser:
                     "name": json_output["name"],
                     "arguments": json.dumps(json_output["arguments"]),
                 }, True
-            else:
-                self.buffer += chunk
-                return None, False
+            self.buffer += chunk
+            return None, False
 
         return chunk, False
 
@@ -241,7 +236,7 @@ Provides generic conversion from OpenAI API message format to model-compatible f
 class BaseMessageConverter:
     """Base message format converter class"""
 
-    def convert_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def convert_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert message format to be compatible with specific model chat templates"""
         converted_messages = []
 
@@ -252,7 +247,7 @@ class BaseMessageConverter:
 
         return converted_messages
 
-    def _convert_single_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_single_message(self, message: dict[str, Any]) -> dict[str, Any]:
         """Convert a single message"""
         if not isinstance(message, dict):
             return message
@@ -264,7 +259,7 @@ class BaseMessageConverter:
 
         return message
 
-    def _convert_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
+    def _convert_tool_calls(self, tool_calls: list[dict[str, Any]]) -> None:
         """Convert arguments format in tool calls"""
         for tool_call in tool_calls:
             if isinstance(tool_call, dict) and "function" in tool_call:

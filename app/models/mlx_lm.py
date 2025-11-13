@@ -1,12 +1,9 @@
+from collections.abc import Generator
 import gc
 import os
-from typing import Dict, Generator, List, Union
 
 import mlx.core as mx
-from mlx_lm.generate import (
-    generate,
-    stream_generate,
-)
+from mlx_lm.generate import generate, stream_generate
 from mlx_lm.models.cache import make_prompt_cache
 from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.utils import load
@@ -49,7 +46,7 @@ class MLX_LM:
             self.max_kv_size = context_length
             self.outlines_tokenizer = OutlinesTransformerTokenizer(self.tokenizer)
         except Exception as e:
-            raise ValueError(f"Error loading model: {str(e)}")
+            raise ValueError(f"Error loading model: {e!s}")
 
     def _apply_pooling_strategy(self, embeddings: mx.array) -> mx.array:
         embeddings = mx.mean(embeddings, axis=1)
@@ -61,8 +58,8 @@ class MLX_LM:
         return embeddings
 
     def _batch_process(
-        self, prompts: List[str], batch_size: int = DEFAULT_BATCH_SIZE
-    ) -> List[List[int]]:
+        self, prompts: list[str], batch_size: int = DEFAULT_BATCH_SIZE
+    ) -> list[list[int]]:
         """Process prompts in batches with optimized tokenization."""
         all_tokenized = []
 
@@ -73,9 +70,7 @@ class MLX_LM:
 
             # Tokenize all prompts in batch
             for p in batch:
-                add_special_tokens = self.bos_token is None or not p.startswith(
-                    self.bos_token
-                )
+                add_special_tokens = self.bos_token is None or not p.startswith(self.bos_token)
                 tokens = self.tokenizer.encode(p, add_special_tokens=add_special_tokens)
                 tokenized_batch.append(tokens)
 
@@ -89,11 +84,9 @@ class MLX_LM:
 
         return all_tokenized
 
-    def _preprocess_prompt(self, prompt: str) -> List[int]:
+    def _preprocess_prompt(self, prompt: str) -> list[int]:
         """Tokenize a single prompt efficiently."""
-        add_special_tokens = self.bos_token is None or not prompt.startswith(
-            self.bos_token
-        )
+        add_special_tokens = self.bos_token is None or not prompt.startswith(self.bos_token)
         tokens = self.tokenizer.encode(prompt, add_special_tokens=add_special_tokens)
         return mx.array(tokens)
 
@@ -102,10 +95,10 @@ class MLX_LM:
 
     def get_embeddings(
         self,
-        prompts: List[str],
+        prompts: list[str],
         batch_size: int = DEFAULT_BATCH_SIZE,
         normalize: bool = True,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Get embeddings for a list of prompts efficiently.
 
@@ -131,9 +124,7 @@ class MLX_LM:
                     batch_embeddings = self.model.model(tokenized_batch)
                     pooled_embedding = self._apply_pooling_strategy(batch_embeddings)
                     if normalize:
-                        pooled_embedding = self._apply_l2_normalization(
-                            pooled_embedding
-                        )
+                        pooled_embedding = self._apply_l2_normalization(pooled_embedding)
                     all_embeddings.extend(pooled_embedding.tolist())
                 finally:
                     # Explicitly free MLX arrays to prevent memory leaks
@@ -145,7 +136,7 @@ class MLX_LM:
                     # Force MLX garbage collection
                     mx.clear_cache()
                     gc.collect()
-        except Exception as e:
+        except Exception:
             # Clean up on error
             mx.clear_cache()
             gc.collect()
@@ -154,8 +145,8 @@ class MLX_LM:
         return all_embeddings
 
     def __call__(
-        self, messages: List[Dict[str, str]], stream: bool = False, **kwargs
-    ) -> Union[str, Generator[str, None, None]]:
+        self, messages: list[dict[str, str]], stream: bool = False, **kwargs
+    ) -> str | Generator[str, None, None]:
         """
         Generate text response from the model.
 
@@ -186,7 +177,7 @@ class MLX_LM:
             repetition_penalty=repetition_penalty,
             repetition_context_size=repetition_context_size,
         )
-        json_schema = kwargs.get("schema", None)
+        json_schema = kwargs.get("schema")
         if json_schema:
             logits_processors.append(
                 JSONLogitsProcessor(
@@ -217,14 +208,13 @@ class MLX_LM:
                 prompt_cache=prompt_cache,
                 logits_processors=logits_processors,
             )
-        else:
-            # Streaming mode: return generator of chunks
-            return stream_generate(
-                self.model,
-                self.tokenizer,
-                input_tokens,
-                sampler=sampler,
-                max_tokens=max_tokens,
-                prompt_cache=prompt_cache,
-                logits_processors=logits_processors,
-            )
+        # Streaming mode: return generator of chunks
+        return stream_generate(
+            self.model,
+            self.tokenizer,
+            input_tokens,
+            sampler=sampler,
+            max_tokens=max_tokens,
+            prompt_cache=prompt_cache,
+            logits_processors=logits_processors,
+        )

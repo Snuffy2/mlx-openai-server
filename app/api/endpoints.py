@@ -1,14 +1,15 @@
 import base64
+from collections.abc import AsyncGenerator
+from http import HTTPStatus
 import json
 import random
 import time
-from http import HTTPStatus
-from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Annotated, Any
 
-import numpy as np
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
+import numpy as np
 
 from app.handler import MFLUX_AVAILABLE, MLXFluxHandler
 from app.handler.mlx_lm import MLXLMHandler
@@ -73,11 +74,9 @@ async def models(raw_request: Request):
         models_data = await handler.get_models()
         return ModelsResponse(data=[Model(**model) for model in models_data])
     except Exception as e:
-        logger.error(f"Error retrieving models: {str(e)}")
+        logger.error(f"Error retrieving models: {e!s}")
         return JSONResponse(
-            content=create_error_response(
-                f"Failed to retrieve models: {str(e)}", "server_error", 500
-            ),
+            content=create_error_response(f"Failed to retrieve models: {e!s}", "server_error", 500),
             status_code=500,
         )
 
@@ -100,11 +99,9 @@ async def queue_stats(raw_request: Request):
         stats = await handler.get_queue_stats()
         return {"status": "ok", "queue_stats": stats}
     except Exception as e:
-        logger.error(f"Failed to get queue stats: {str(e)}")
+        logger.error(f"Failed to get queue stats: {e!s}")
         return JSONResponse(
-            content=create_error_response(
-                "Failed to get queue stats", "server_error", 500
-            ),
+            content=create_error_response("Failed to get queue stats", "server_error", 500),
             status_code=500,
         )
 
@@ -129,21 +126,16 @@ async def chat_completions(request: ChatCompletionRequest, raw_request: Request)
 
     if not isinstance(handler, MLXVLMHandler) and not isinstance(handler, MLXLMHandler):
         return JSONResponse(
-            content=create_error_response(
-                "Unsupported model type", "unsupported_request", 400
-            ),
+            content=create_error_response("Unsupported model type", "unsupported_request", 400),
             status_code=400,
         )
 
     try:
         if isinstance(handler, MLXVLMHandler):
             return await process_multimodal_request(handler, request)
-        else:
-            return await process_text_request(handler, request)
+        return await process_text_request(handler, request)
     except Exception as e:
-        logger.error(
-            f"Error processing chat completion request: {str(e)}", exc_info=True
-        )
+        logger.error(f"Error processing chat completion request: {e!s}", exc_info=True)
         return JSONResponse(
             content=create_error_response(str(e)),
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -164,11 +156,9 @@ async def embeddings(request: EmbeddingRequest, raw_request: Request):
 
     try:
         embeddings = await handler.generate_embeddings_response(request)
-        return create_response_embeddings(
-            embeddings, request.model, request.encoding_format
-        )
+        return create_response_embeddings(embeddings, request.model, request.encoding_format)
     except Exception as e:
-        logger.error(f"Error processing embedding request: {str(e)}", exc_info=True)
+        logger.error(f"Error processing embedding request: {e!s}", exc_info=True)
         return JSONResponse(
             content=create_error_response(str(e)),
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -202,9 +192,7 @@ async def image_generations(request: ImageGenerationRequest, raw_request: Reques
         image_response = await handler.generate_image(request)
         return image_response
     except Exception as e:
-        logger.error(
-            f"Error processing image generation request: {str(e)}", exc_info=True
-        )
+        logger.error(f"Error processing image generation request: {e!s}", exc_info=True)
         return JSONResponse(
             content=create_error_response(str(e)),
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -212,9 +200,7 @@ async def image_generations(request: ImageGenerationRequest, raw_request: Reques
 
 
 @router.post("/v1/images/edits")
-async def create_image_edit(
-    request: Annotated[ImageEditRequest, Form()], raw_request: Request
-):
+async def create_image_edit(request: Annotated[ImageEditRequest, Form()], raw_request: Request):
     """Handle image editing requests with dynamic provider routing."""
 
     handler = raw_request.app.state.handler
@@ -240,7 +226,7 @@ async def create_image_edit(
         image_response = await handler.edit_image(request)
         return image_response
     except Exception as e:
-        logger.error(f"Error processing image edit request: {str(e)}", exc_info=True)
+        logger.error(f"Error processing image edit request: {e!s}", exc_info=True)
         return JSONResponse(
             content=create_error_response(str(e)),
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -263,7 +249,6 @@ async def create_audio_transcriptions(
             )
 
         if request.stream:
-
             # procoess the request before sending to the handler
             request_data = await handler._prepare_transcription_request(request)
             return StreamingResponse(
@@ -277,13 +262,10 @@ async def create_audio_transcriptions(
                     "X-Accel-Buffering": "no",
                 },
             )
-        else:
-            transcription_response = await handler.generate_transcription_response(
-                request
-            )
-            return transcription_response
+        transcription_response = await handler.generate_transcription_response(request)
+        return transcription_response
     except Exception as e:
-        logger.error(f"Error processing transcription request: {str(e)}", exc_info=True)
+        logger.error(f"Error processing transcription request: {e!s}", exc_info=True)
         return JSONResponse(
             content=create_error_response(str(e)),
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -291,7 +273,7 @@ async def create_audio_transcriptions(
 
 
 def create_response_embeddings(
-    embeddings: List[float], model: str, encoding_format: str = "float"
+    embeddings: list[float], model: str, encoding_format: str = "float"
 ) -> EmbeddingResponse:
     embeddings_response = []
     for index, embedding in enumerate(embeddings):
@@ -305,19 +287,17 @@ def create_response_embeddings(
                 )
             )
         else:
-            embeddings_response.append(
-                EmbeddingResponseData(embedding=embedding, index=index)
-            )
+            embeddings_response.append(EmbeddingResponseData(embedding=embedding, index=index))
     return EmbeddingResponse(data=embeddings_response, model=model)
 
 
 def create_response_chunk(
-    chunk: Union[str, Dict[str, Any]],
+    chunk: str | dict[str, Any],
     model: str,
     is_final: bool = False,
-    finish_reason: Optional[str] = "stop",
-    chat_id: Optional[str] = None,
-    created_time: Optional[int] = None,
+    finish_reason: str | None = "stop",
+    chat_id: str | None = None,
+    created_time: int | None = None,
 ) -> ChatCompletionChunk:
     """Create a formatted response chunk for streaming."""
     chat_id = chat_id or get_id()
@@ -390,14 +370,12 @@ def create_response_chunk(
         created=created_time,
         model=model,
         choices=[
-            StreamingChoice(
-                index=0, delta=delta, finish_reason=finish_reason if is_final else None
-            )
+            StreamingChoice(index=0, delta=delta, finish_reason=finish_reason if is_final else None)
         ],
     )
 
 
-def _yield_sse_chunk(data: Union[Dict[str, Any], ChatCompletionChunk]) -> str:
+def _yield_sse_chunk(data: dict[str, Any] | ChatCompletionChunk) -> str:
     """Helper function to format and yield SSE chunk data."""
     if isinstance(data, ChatCompletionChunk):
         return f"data: {json.dumps(data.model_dump())}\n\n"
@@ -456,7 +434,7 @@ async def handle_stream_response(generator: AsyncGenerator, model: str):
                 yield _yield_sse_chunk(error_response)
 
     except Exception as e:
-        logger.error(f"Error in stream wrapper: {str(e)}", exc_info=True)
+        logger.error(f"Error in stream wrapper: {e!s}", exc_info=True)
         error_response = create_error_response(
             str(e), "server_error", HTTPStatus.INTERNAL_SERVER_ERROR
         )
@@ -474,9 +452,7 @@ async def process_multimodal_request(handler, request: ChatCompletionRequest):
     """Process multimodal-specific requests."""
     if request.stream:
         return StreamingResponse(
-            handle_stream_response(
-                handler.generate_multimodal_stream(request), request.model
-            ),
+            handle_stream_response(handler.generate_multimodal_stream(request), request.model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -484,18 +460,14 @@ async def process_multimodal_request(handler, request: ChatCompletionRequest):
                 "X-Accel-Buffering": "no",
             },
         )
-    return format_final_response(
-        await handler.generate_multimodal_response(request), request.model
-    )
+    return format_final_response(await handler.generate_multimodal_response(request), request.model)
 
 
 async def process_text_request(handler, request: ChatCompletionRequest):
     """Process text-only requests."""
     if request.stream:
         return StreamingResponse(
-            handle_stream_response(
-                handler.generate_text_stream(request), request.model
-            ),
+            handle_stream_response(handler.generate_text_stream(request), request.model),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -503,9 +475,7 @@ async def process_text_request(handler, request: ChatCompletionRequest):
                 "X-Accel-Buffering": "no",
             },
         )
-    return format_final_response(
-        await handler.generate_text_response(request), request.model
-    )
+    return format_final_response(await handler.generate_text_response(request), request.model)
 
 
 def get_id():
@@ -526,9 +496,7 @@ def get_tool_call_id():
     return f"call_{timestamp}{random_suffix:06d}"
 
 
-def format_final_response(
-    response: Union[str, Dict[str, Any]], model: str
-) -> ChatCompletionResponse:
+def format_final_response(response: str | dict[str, Any], model: str) -> ChatCompletionResponse:
     """Format the final non-streaming response."""
 
     if isinstance(response, str):
@@ -582,9 +550,7 @@ def format_final_response(
             arguments_str = arguments
         else:
             arguments_str = json.dumps(arguments)
-        function_call = FunctionCall(
-            name=tool_call.get("name"), arguments=arguments_str
-        )
+        function_call = FunctionCall(name=tool_call.get("name"), arguments=arguments_str)
         tool_call_response = ChatCompletionMessageToolCall(
             id=get_tool_call_id(), type="function", function=function_call, index=idx
         )

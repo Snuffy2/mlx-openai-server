@@ -1,12 +1,8 @@
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from app.handler.parser.base import (
-    BaseMessageConverter,
-    BaseThinkingParser,
-    BaseToolParser,
-)
+from app.handler.parser.base import BaseMessageConverter, BaseThinkingParser, BaseToolParser
 
 TOOL_OPEN = "<minimax:tool_call>"
 TOOL_CLOSE = "</minimax:tool_call>"
@@ -27,9 +23,7 @@ class MinimaxToolParser(BaseToolParser):
     def __init__(self):
         super().__init__(tool_open=TOOL_OPEN, tool_close=TOOL_CLOSE)
         # Regex patterns for parsing MiniMax tool calls
-        self.func_detail_regex = re.compile(
-            r'<invoke name="([^"]+)"\s*>(.*)', re.DOTALL
-        )
+        self.func_detail_regex = re.compile(r'<invoke name="([^"]+)"\s*>(.*)', re.DOTALL)
         self.func_arg_regex = re.compile(
             r'<parameter name="([^"]+)"\s*>([^<]*)</parameter>', re.DOTALL
         )
@@ -55,7 +49,7 @@ class MinimaxToolParser(BaseToolParser):
         # Return as string if all else fails
         return value
 
-    def _parse_tool_content(self, tool_content: str) -> Optional[Dict[str, Any]]:
+    def _parse_tool_content(self, tool_content: str) -> dict[str, Any] | None:
         """
         Overrides the base method to parse MiniMax's specific tool call format.
         """
@@ -80,9 +74,7 @@ class MinimaxToolParser(BaseToolParser):
             # Build tool call object
             return {"name": func_name, "arguments": arguments}
         except Exception as e:
-            print(
-                f"Error parsing MiniMax tool call content: {tool_content}, Error: {e}"
-            )
+            print(f"Error parsing MiniMax tool call content: {tool_content}, Error: {e}")
             return None
 
 

@@ -1,12 +1,12 @@
+from abc import ABC, abstractmethod
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import gc
 import hashlib
 import os
 import tempfile
 import time
-from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional
+from typing import Any
 
 import aiohttp
 from loguru import logger
@@ -18,14 +18,14 @@ class BaseProcessor(ABC):
     def __init__(self, max_workers: int = 4, cache_size: int = 1000):
         # Use tempfile for macOS-efficient temporary file handling
         self.temp_dir = tempfile.TemporaryDirectory()
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self._cache_size = cache_size
         self._last_cleanup = time.time()
         self._cleanup_interval = 3600  # 1 hour
         # Replace lru_cache with manual cache for better control
-        self._hash_cache: Dict[str, str] = {}
-        self._cache_access_times: Dict[str, float] = {}
+        self._hash_cache: dict[str, str] = {}
+        self._cache_access_times: dict[str, float] = {}
 
     def _get_media_hash(self, media_url: str) -> str:
         """Get hash for media URL with manual caching that can be cleared."""
@@ -70,34 +70,26 @@ class BaseProcessor(ABC):
     @abstractmethod
     def _get_media_format(self, media_url: str, data: bytes = None) -> str:
         """Determine media format from URL or data. Must be implemented by subclasses."""
-        pass
 
     @abstractmethod
     def _validate_media_data(self, data: bytes) -> bool:
         """Validate media data. Must be implemented by subclasses."""
-        pass
 
     @abstractmethod
     def _get_timeout(self) -> int:
         """Get timeout for HTTP requests. Must be implemented by subclasses."""
-        pass
 
     @abstractmethod
     def _get_max_file_size(self) -> int:
         """Get maximum file size in bytes. Must be implemented by subclasses."""
-        pass
 
     @abstractmethod
-    def _process_media_data(
-        self, data: bytes, cached_path: str, **kwargs
-    ) -> Dict[str, Any]:
+    def _process_media_data(self, data: bytes, cached_path: str, **kwargs) -> dict[str, Any]:
         """Process media data and save to cached path. Must be implemented by subclasses."""
-        pass
 
     @abstractmethod
     def _get_media_type_name(self) -> str:
         """Get media type name for logging. Must be implemented by subclasses."""
-        pass
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -113,10 +105,7 @@ class BaseProcessor(ABC):
             try:
                 for file in os.listdir(self.temp_dir.name):
                     file_path = os.path.join(self.temp_dir.name, file)
-                    if (
-                        os.path.getmtime(file_path)
-                        < current_time - self._cleanup_interval
-                    ):
+                    if os.path.getmtime(file_path) < current_time - self._cleanup_interval:
                         os.remove(file_path)
                 self._last_cleanup = current_time
                 # Also clean up cache periodically
@@ -124,22 +113,16 @@ class BaseProcessor(ABC):
                     self._evict_oldest_cache_entries()
                 gc.collect()  # Force garbage collection after cleanup
             except Exception as e:
-                logger.warning(
-                    f"Failed to clean up old {self._get_media_type_name()} files: {str(e)}"
-                )
+                logger.warning(f"Failed to clean up old {self._get_media_type_name()} files: {e!s}")
 
     async def _process_single_media(self, media_url: str, **kwargs) -> str:
         try:
             media_hash = self._get_media_hash(media_url)
             media_format = self._get_media_format(media_url)
-            cached_path = os.path.join(
-                self.temp_dir.name, f"{media_hash}.{media_format}"
-            )
+            cached_path = os.path.join(self.temp_dir.name, f"{media_hash}.{media_format}")
 
             if os.path.exists(cached_path):
-                logger.debug(
-                    f"Using cached {self._get_media_type_name()}: {cached_path}"
-                )
+                logger.debug(f"Using cached {self._get_media_type_name()}: {cached_path}")
                 return cached_path
 
             if os.path.exists(media_url):
@@ -148,13 +131,11 @@ class BaseProcessor(ABC):
                     data = f.read()
 
                 if not self._validate_media_data(data):
-                    raise ValueError(
-                        f"Invalid {self._get_media_type_name()} file format"
-                    )
+                    raise ValueError(f"Invalid {self._get_media_type_name()} file format")
 
                 return self._process_media_data(data, cached_path, **kwargs)
 
-            elif media_url.startswith("data:"):
+            if media_url.startswith("data:"):
                 _, encoded = media_url.split(",", 1)
                 estimated_size = len(encoded) * 3 / 4
                 if estimated_size > self._get_max_file_size():
@@ -164,29 +145,22 @@ class BaseProcessor(ABC):
                 data = base64.b64decode(encoded)
 
                 if not self._validate_media_data(data):
-                    raise ValueError(
-                        f"Invalid {self._get_media_type_name()} file format"
-                    )
+                    raise ValueError(f"Invalid {self._get_media_type_name()} file format")
 
                 return self._process_media_data(data, cached_path, **kwargs)
-            else:
-                session = await self._get_session()
-                async with session.get(media_url) as response:
-                    response.raise_for_status()
-                    data = await response.read()
+            session = await self._get_session()
+            async with session.get(media_url) as response:
+                response.raise_for_status()
+                data = await response.read()
 
-                    if not self._validate_media_data(data):
-                        raise ValueError(
-                            f"Invalid {self._get_media_type_name()} file format"
-                        )
+                if not self._validate_media_data(data):
+                    raise ValueError(f"Invalid {self._get_media_type_name()} file format")
 
-                    return self._process_media_data(data, cached_path, **kwargs)
+                return self._process_media_data(data, cached_path, **kwargs)
 
         except Exception as e:
-            logger.error(f"Failed to process {self._get_media_type_name()}: {str(e)}")
-            raise ValueError(
-                f"Failed to process {self._get_media_type_name()}: {str(e)}"
-            )
+            logger.error(f"Failed to process {self._get_media_type_name()}: {e!s}")
+            raise ValueError(f"Failed to process {self._get_media_type_name()}: {e!s}")
         finally:
             gc.collect()
 
@@ -207,15 +181,15 @@ class BaseProcessor(ABC):
             if self._session and not self._session.closed:
                 await self._session.close()
         except Exception as e:
-            logger.warning(f"Exception closing aiohttp session: {str(e)}")
+            logger.warning(f"Exception closing aiohttp session: {e!s}")
         try:
             self.executor.shutdown(wait=True)
         except Exception as e:
-            logger.warning(f"Exception shutting down executor: {str(e)}")
+            logger.warning(f"Exception shutting down executor: {e!s}")
         try:
             self.temp_dir.cleanup()
         except Exception as e:
-            logger.warning(f"Exception cleaning up temp directory: {str(e)}")
+            logger.warning(f"Exception cleaning up temp directory: {e!s}")
 
     async def __aenter__(self):
         return self

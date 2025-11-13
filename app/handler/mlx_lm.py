@@ -1,9 +1,10 @@
 import asyncio
+from collections.abc import AsyncGenerator
 import gc
-import time
-import uuid
 from http import HTTPStatus
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+import time
+from typing import Any
+import uuid
 
 from fastapi import HTTPException
 from loguru import logger
@@ -44,12 +45,8 @@ class MLXLMHandler:
             trust_remote_code (bool): Enable trust_remote_code when loading models.
         """
         self.model_path = model_path
-        self.model = MLX_LM(
-            model_path, context_length, trust_remote_code=trust_remote_code
-        )
-        self.model_created = int(
-            time.time()
-        )  # Store creation time when model is loaded
+        self.model = MLX_LM(model_path, context_length, trust_remote_code=trust_remote_code)
+        self.model_created = int(time.time())  # Store creation time when model is loaded
         self.model_type = self.model.get_model_type()
 
         # Store parser configuration
@@ -65,7 +62,7 @@ class MLXLMHandler:
 
         logger.info(f"Initialized MLXHandler with model path: {model_path}")
 
-    def _create_parsers(self) -> Tuple[Optional[Any], Optional[Any]]:
+    def _create_parsers(self) -> tuple[Any | None, Any | None]:
         """
         Create appropriate parsers based on model type and available tools.
         Uses ParserFactory for centralized parser creation logic.
@@ -80,7 +77,7 @@ class MLXLMHandler:
             manual_tool_parser=self.tool_call_parser,
         )
 
-    async def get_models(self) -> List[Dict[str, Any]]:
+    async def get_models(self) -> list[dict[str, Any]]:
         """
         Get list of available models with their metadata.
         """
@@ -94,10 +91,10 @@ class MLXLMHandler:
                 }
             ]
         except Exception as e:
-            logger.error(f"Error getting models: {str(e)}")
+            logger.error(f"Error getting models: {e!s}")
             return []
 
-    async def initialize(self, queue_config: Optional[Dict[str, Any]] = None):
+    async def initialize(self, queue_config: dict[str, Any] | None = None):
         """Initialize the handler and start the request queue."""
         if not queue_config:
             queue_config = {"max_concurrency": 1, "timeout": 300, "queue_size": 100}
@@ -127,17 +124,13 @@ class MLXLMHandler:
         try:
             chat_messages, model_params = await self._prepare_text_request(request)
             request_data = {"messages": chat_messages, "stream": True, **model_params}
-            response_generator = await self.request_queue.submit(
-                request_id, request_data
-            )
+            response_generator = await self.request_queue.submit(request_id, request_data)
             # Create appropriate parsers for this model type
 
             thinking_parser, tool_parser = self._create_parsers()
             is_first_chunk = True
 
-            if thinking_parser and ParserFactory.has_special_parsing(
-                self.reasoning_parser
-            ):
+            if thinking_parser and ParserFactory.has_special_parsing(self.reasoning_parser):
                 for chunk in response_generator:
                     if not chunk or not chunk.text:
                         continue
@@ -148,7 +141,6 @@ class MLXLMHandler:
                     if is_complete:
                         break
             else:
-
                 if ParserFactory.respects_enable_thinking(self.reasoning_parser):
                     chat_template_kwargs = model_params.get("chat_template_kwargs", {})
                     enable_thinking = chat_template_kwargs.get("enable_thinking", True)
@@ -157,18 +149,14 @@ class MLXLMHandler:
 
                 # # Process streaming response
                 for chunk in response_generator:
-
                     if not chunk or not chunk.text:
                         continue
 
                     text = chunk.text
 
                     if is_first_chunk:
-                        if (
-                            thinking_parser
-                            and ParserFactory.needs_redacted_reasoning_prefix(
-                                self.reasoning_parser
-                            )
+                        if thinking_parser and ParserFactory.needs_redacted_reasoning_prefix(
+                            self.reasoning_parser
                         ):
                             text = thinking_parser.get_thinking_open() + text
                         is_first_chunk = False
@@ -198,11 +186,9 @@ class MLXLMHandler:
             )
             raise HTTPException(status_code=429, detail=content)
         except Exception as e:
-            logger.error(
-                f"Error in text stream generation for request {request_id}: {str(e)}"
-            )
+            logger.error(f"Error in text stream generation for request {request_id}: {e!s}")
             content = create_error_response(
-                f"Failed to generate text stream: {str(e)}",
+                f"Failed to generate text stream: {e!s}",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
@@ -241,9 +227,7 @@ class MLXLMHandler:
 
             response_text = response
 
-            if thinking_parser and ParserFactory.has_special_parsing(
-                self.reasoning_parser
-            ):
+            if thinking_parser and ParserFactory.has_special_parsing(self.reasoning_parser):
                 # Handle parsers with special parsing logic (e.g., harmony returns dict)
                 return thinking_parser.parse(response_text)
 
@@ -279,9 +263,9 @@ class MLXLMHandler:
             )
             raise HTTPException(status_code=429, detail=content)
         except Exception as e:
-            logger.error(f"Error in text response generation: {str(e)}")
+            logger.error(f"Error in text response generation: {e!s}")
             content = create_error_response(
-                f"Failed to generate text response: {str(e)}",
+                f"Failed to generate text response: {e!s}",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
@@ -314,15 +298,15 @@ class MLXLMHandler:
             return response
 
         except Exception as e:
-            logger.error(f"Error in embeddings generation: {str(e)}")
+            logger.error(f"Error in embeddings generation: {e!s}")
             content = create_error_response(
-                f"Failed to generate embeddings: {str(e)}",
+                f"Failed to generate embeddings: {e!s}",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             raise HTTPException(status_code=500, detail=content)
 
-    async def _process_request(self, request_data: Dict[str, Any]) -> str:
+    async def _process_request(self, request_data: dict[str, Any]) -> str:
         """
         Process a text request. This is the worker function for the request queue.
 
@@ -357,26 +341,22 @@ class MLXLMHandler:
                 refined_messages = []
                 for message in messages:
                     # Filter out None values
-                    cleaned_message = {
-                        k: v for k, v in message.items() if v is not None
-                    }
+                    cleaned_message = {k: v for k, v in message.items() if v is not None}
                     refined_messages.append(cleaned_message)
 
             # Call the model
-            response = self.model(
-                messages=refined_messages, stream=stream, **model_params
-            )
+            response = self.model(messages=refined_messages, stream=stream, **model_params)
             # Force garbage collection after model inference
             gc.collect()
             return response
 
         except Exception as e:
-            logger.error(f"Error processing text request: {str(e)}")
+            logger.error(f"Error processing text request: {e!s}")
             # Clean up on error
             gc.collect()
             raise
 
-    async def get_queue_stats(self) -> Dict[str, Any]:
+    async def get_queue_stats(self) -> dict[str, Any]:
         """
         Get statistics from the request queue and performance metrics.
 
@@ -402,12 +382,12 @@ class MLXLMHandler:
                 await self.request_queue.stop()
             logger.info("MLXLMHandler cleanup completed successfully")
         except Exception as e:
-            logger.error(f"Error during MLXLMHandler cleanup: {str(e)}")
+            logger.error(f"Error during MLXLMHandler cleanup: {e!s}")
             raise
 
     async def _prepare_text_request(
         self, request: ChatCompletionRequest
-    ) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
+    ) -> tuple[list[dict[str, str]], dict[str, Any]]:
         """
         Prepare a text request by parsing model parameters and verifying the format of messages.
 
@@ -427,17 +407,15 @@ class MLXLMHandler:
                 if self.enable_auto_tool_choice and tool_choice == "auto":
                     request_dict["chat_template_kwargs"]["tool_choice"] = "auto"
                 elif tool_choice:
-                    logger.warning(
-                        "Tool choice has not supported yet, will be ignored."
-                    )
+                    logger.warning("Tool choice has not supported yet, will be ignored.")
                 request_dict["chat_template_kwargs"]["tools"] = tools
 
             if request_dict.get("response_format", None):
                 response_format = request_dict.pop("response_format", None)
                 if response_format.get("type") == "json_schema":
-                    request_dict["schema"] = response_format.get(
-                        "json_schema", None
-                    ).get("schema", None)
+                    request_dict["schema"] = response_format.get("json_schema", None).get(
+                        "schema", None
+                    )
 
             # Format chat messages and merge system messages into index 0
             chat_messages = []
@@ -487,9 +465,9 @@ class MLXLMHandler:
             return chat_messages, request_dict
 
         except Exception as e:
-            logger.error(f"Failed to prepare text request: {str(e)}")
+            logger.error(f"Failed to prepare text request: {e!s}")
             content = create_error_response(
-                f"Failed to process request: {str(e)}",
+                f"Failed to process request: {e!s}",
                 "bad_request",
                 HTTPStatus.BAD_REQUEST,
             )

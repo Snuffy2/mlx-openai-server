@@ -1,7 +1,6 @@
 import asyncio
 import gc
 import os
-from typing import List
 
 from app.core.base_processor import BaseProcessor
 
@@ -21,15 +20,15 @@ class AudioProcessor(BaseProcessor):
             mime_type = media_url.split(";")[0].split(":")[1]
             if "mp3" in mime_type or "mpeg" in mime_type:
                 return "mp3"
-            elif "wav" in mime_type:
+            if "wav" in mime_type:
                 return "wav"
-            elif "m4a" in mime_type or "mp4" in mime_type:
+            if "m4a" in mime_type or "mp4" in mime_type:
                 return "m4a"
-            elif "ogg" in mime_type:
+            if "ogg" in mime_type:
                 return "ogg"
-            elif "flac" in mime_type:
+            if "flac" in mime_type:
                 return "flac"
-            elif "aac" in mime_type:
+            if "aac" in mime_type:
                 return "aac"
         else:
             # Extract format from file extension
@@ -90,7 +89,7 @@ class AudioProcessor(BaseProcessor):
         """Process a single audio URL and return path to cached file."""
         return await self._process_single_media(audio_url)
 
-    async def process_audio_urls(self, audio_urls: List[str]) -> List[str]:
+    async def process_audio_urls(self, audio_urls: list[str]) -> list[str]:
         """Process multiple audio URLs and return paths to cached files."""
         tasks = [self.process_audio_url(url) for url in audio_urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)

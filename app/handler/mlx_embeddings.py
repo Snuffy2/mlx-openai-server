@@ -1,8 +1,8 @@
 import gc
-import time
-import uuid
 from http import HTTPStatus
-from typing import Any, Dict, List
+import time
+from typing import Any
+import uuid
 
 from fastapi import HTTPException
 from loguru import logger
@@ -29,16 +29,14 @@ class MLXEmbeddingsHandler:
         """
         self.model_path = model_path
         self.model = MLX_Embeddings(model_path)
-        self.model_created = int(
-            time.time()
-        )  # Store creation time when model is loaded
+        self.model_created = int(time.time())  # Store creation time when model is loaded
 
         # Initialize request queue for embedding tasks
         self.request_queue = RequestQueue(max_concurrency=max_concurrency)
 
         logger.info(f"Initialized MLXEmbeddingsHandler with model path: {model_path}")
 
-    async def get_models(self) -> List[Dict[str, Any]]:
+    async def get_models(self) -> list[dict[str, Any]]:
         """
         Get list of available models with their metadata.
         """
@@ -52,10 +50,10 @@ class MLXEmbeddingsHandler:
                 }
             ]
         except Exception as e:
-            logger.error(f"Error getting models: {str(e)}")
+            logger.error(f"Error getting models: {e!s}")
             return []
 
-    async def initialize(self, config: Dict[str, Any]):
+    async def initialize(self, config: dict[str, Any]):
         """
         Initialize the request queue with configuration.
 
@@ -91,15 +89,15 @@ class MLXEmbeddingsHandler:
             return response
 
         except Exception as e:
-            logger.error(f"Error in embeddings generation: {str(e)}")
+            logger.error(f"Error in embeddings generation: {e!s}")
             content = create_error_response(
-                f"Failed to generate embeddings: {str(e)}",
+                f"Failed to generate embeddings: {e!s}",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             raise HTTPException(status_code=500, detail=content)
 
-    async def _process_request(self, request_data: Dict[str, Any]) -> List[List[float]]:
+    async def _process_request(self, request_data: dict[str, Any]) -> list[list[float]]:
         """
         Process an embeddings request. This is the worker function for the request queue.
 
@@ -123,12 +121,12 @@ class MLXEmbeddingsHandler:
             raise ValueError(f"Unknown request type: {request_data.get('type')}")
 
         except Exception as e:
-            logger.error(f"Error processing embeddings request: {str(e)}")
+            logger.error(f"Error processing embeddings request: {e!s}")
             # Clean up on error
             gc.collect()
             raise
 
-    async def get_queue_stats(self) -> Dict[str, Any]:
+    async def get_queue_stats(self) -> dict[str, Any]:
         """
         Get statistics from the request queue and performance metrics.
 
@@ -156,7 +154,7 @@ class MLXEmbeddingsHandler:
                 self.model.cleanup()
             logger.info("MLXEmbeddingsHandler cleanup completed successfully")
         except Exception as e:
-            logger.error(f"Error during MLXEmbeddingsHandler cleanup: {str(e)}")
+            logger.error(f"Error during MLXEmbeddingsHandler cleanup: {e!s}")
             raise
 
     def __del__(self):

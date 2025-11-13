@@ -1,12 +1,8 @@
 import json
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from app.handler.parser.base import (
-    BaseMessageConverter,
-    BaseThinkingParser,
-    BaseToolParser,
-)
+from app.handler.parser.base import BaseMessageConverter, BaseThinkingParser, BaseToolParser
 
 TOOL_OPEN = "<tool_call>"
 TOOL_CLOSE = "</tool_call>"
@@ -53,7 +49,7 @@ class Glm4MoEToolParser(BaseToolParser):
         # Return as string if all else fails
         return value
 
-    def _parse_tool_content(self, tool_content: str) -> Optional[Dict[str, Any]]:
+    def _parse_tool_content(self, tool_content: str) -> dict[str, Any] | None:
         """
         Overrides the base method to parse GLM4's specific tool call format.
         """
