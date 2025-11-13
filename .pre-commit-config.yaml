@@ -36,24 +36,14 @@ repos:
         additional_dependencies:
           - tomli
 
-  - repo: https://github.com/psf/black
-    rev: 25.11.0
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
     hooks:
-      - id: black
-        language_version: python3
-        args: [--line-length=88]
-
-  - repo: https://github.com/pycqa/isort
-    rev: 7.0.0
-    hooks:
-      - id: isort
-        args: [--profile=black]
-
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.3.0
-    hooks:
-      - id: flake8
-        additional_dependencies: [Flake8-pyproject]
+      # Run the linter.
+      - id: ruff-check
+        args: [--fix]
+      # Run the formatter.
+      - id: ruff-format
 
 ci:
   autofix_prs: true
