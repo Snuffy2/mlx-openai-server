@@ -1,5 +1,6 @@
-from app.utils.dill import Hasher
 from outlines.models.transformers import TransformerTokenizer
+
+from app.utils.dill import Hasher
 
 
 class OutlinesTransformerTokenizer(TransformerTokenizer):

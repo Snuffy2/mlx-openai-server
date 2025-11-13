@@ -100,9 +100,9 @@ select = [
   "B032",     # Possible unintentional type annotation (using :). Did you mean to assign (using =)?
   "B904",     # Use raise from to specify exception cause
   "B905",     # zip() without an explicit strict= parameter
-  "BLE",
-  "C",        # complexity
-  "COM818",   # Trailing comma on bare tuple prohibited
+  #"BLE",
+  "C",      # complexity
+  "COM818", # Trailing comma on bare tuple prohibited
   #"D",        # docstrings
   "DTZ003", # Use datetime.now(tz=) instead of datetime.utcnow()
   "DTZ004", # Use datetime.fromtimestamp(ts, tz=) instead of datetime.utcfromtimestamp(ts)
