@@ -1,6 +1,6 @@
 import unittest
 
-from mlx_openai_server.handler.parser.base import BaseToolParser
+from mlx_openai_server.handler.parser.base import BaseThinkingParser, BaseToolParser
 
 
 class TestBaseToolParser(unittest.TestCase):
@@ -142,6 +142,78 @@ class TestBaseToolParser(unittest.TestCase):
                     self.assertEqual(
                         output, expected, f"Chunk {i}: Expected {expected}, got {output}"
                     )
+
+
+class TestBaseThinkingParser(unittest.TestCase):
+    def setUp(self):
+        self.parser = BaseThinkingParser("<think>", "</think>")
+
+    def test_parse(self):
+        test_cases = [
+            {
+                "name": "normal case",
+                "content": "prefix<think>thinking content</think>suffix",
+                "expected": ("thinking content", "prefixsuffix"),
+            },
+            {
+                "name": "closing only",
+                "content": "thinking content</think>suffix",
+                "expected": ("thinking content", "suffix"),
+            },
+            {"name": "no tags", "content": "normal content", "expected": (None, "normal content")},
+            {
+                "name": "opening no closing",
+                "content": "prefix<think>thinking content",
+                "expected": (None, "prefix<think>thinking content"),
+            },
+            {
+                "name": "empty thinking",
+                "content": "prefix<think></think>suffix",
+                "expected": ("", "prefixsuffix"),
+            },
+        ]
+
+        for case in test_cases:
+            with self.subTest(msg=case["name"]):
+                thinking, remaining = self.parser.parse(case["content"])
+                self.assertEqual(thinking, case["expected"][0])
+                self.assertEqual(remaining, case["expected"][1])
+
+    def test_parse_stream(self):
+        test_cases = [
+            {
+                "name": "normal case",
+                "chunk": "prefix<think>thinking</think>suffix",
+                "expected": ("prefixsuffix", True),
+            },
+            {
+                "name": "opening only",
+                "chunk": "prefix<think>thinking",
+                "expected": ({"reasoning_content": "thinking"}, False),
+            },
+            {
+                "name": "closing in thinking",
+                "chunk": "more thinking</think>suffix",
+                "setup": lambda p: setattr(p, "is_thinking", True),
+                "expected": ({"reasoning_content": "more thinking", "content": "suffix"}, True),
+            },
+            {
+                "name": "closing only",
+                "chunk": "thinking content</think>suffix",
+                "expected": ({"reasoning_content": "thinking content", "content": "suffix"}, True),
+            },
+            {"name": "no tags", "chunk": "normal content", "expected": (None, False)},
+        ]
+
+        for case in test_cases:
+            with self.subTest(msg=case["name"]):
+                if "setup" in case:
+                    case["setup"](self.parser)
+                result, complete = self.parser.parse_stream(case["chunk"])
+                self.assertEqual(result, case["expected"][0])
+                self.assertEqual(complete, case["expected"][1])
+                # Reset parser state
+                self.parser.is_thinking = False
 
 
 if __name__ == "__main__":
