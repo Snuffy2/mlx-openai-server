@@ -9,7 +9,7 @@ THINKING_OPEN = "<think>"
 THINKING_CLOSE = "</think>"
 
 class Glm4MoEThinkingParser(BaseThinkingParser):
-    """Parser for GLM4 model's thinking response format."""
+    """Parser for GLM4 MoE model's thinking response format."""
     
     def __init__(self):
         super().__init__(

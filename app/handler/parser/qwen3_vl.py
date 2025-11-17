@@ -15,7 +15,7 @@ class Qwen3VLToolParser(BaseToolParser):
         )
 
 class Qwen3VLThinkingParser(BaseThinkingParser):
-    """Parser for Qwen3 MoE model's thinking response format."""
+    """Parser for Qwen3 VL model's thinking response format."""
     
     def __init__(self):
         super().__init__(

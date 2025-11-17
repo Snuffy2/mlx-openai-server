@@ -17,20 +17,31 @@ class BaseThinkingParser:
 
     def parse(self, content: str) -> Tuple[Optional[str], str]:
         start_thinking = content.find(self.thinking_open)
-        if start_thinking == -1:
-            return None, content
-        
         thinking_open_len = len(self.thinking_open)
         thinking_close_len = len(self.thinking_close)
-        start_content = start_thinking + thinking_open_len
-        end_thinking = content.find(self.thinking_close, start_content)
         
-        if end_thinking == -1:
+        if start_thinking != -1:
+            # Normal case: both opening and closing tags present
+            start_content = start_thinking + thinking_open_len
+            end_thinking = content.find(self.thinking_close, start_content)
+            
+            if end_thinking == -1:
+                return None, content
+            
+            thinking_content = content[start_content:end_thinking].strip()
+            remaining_content = content[end_thinking + thinking_close_len:].strip()
+            return thinking_content, remaining_content
+        else:
+            # Check if closing tag exists (treat everything before it as thinking content)
+            end_thinking = content.find(self.thinking_close)
+            if end_thinking != -1:
+                # Treat everything before closing tag as thinking content
+                thinking_content = content[:end_thinking].strip()
+                remaining_content = content[end_thinking + thinking_close_len:].strip()
+                return thinking_content, remaining_content
+            
+            # No thinking tags found
             return None, content
-        
-        thinking_content = content[start_content:end_thinking].strip()
-        remaining_content = content[end_thinking + thinking_close_len:].strip()
-        return thinking_content, remaining_content
         
     
     def parse_stream(self, chunk: Optional[str] = None) -> Tuple[Optional[Any], bool]:
@@ -69,8 +80,28 @@ class BaseThinkingParser:
                     }, False
                 # Just the opening tag with nothing after it
                 return before_open if before_open else None, False
-            # No thinking tag, return chunk as is
-            return chunk, False
+            else:
+                # Check if thinking_close is in the chunk without thinking_open
+                if self.thinking_close in chunk:
+                    close_idx = chunk.find(self.thinking_close)
+                    self.is_thinking = False
+                    # Treat everything before closing tag as thinking content
+                    thinking_content = chunk[:close_idx]
+                    after_close = chunk[close_idx + len(self.thinking_close):]
+                    
+                    if thinking_content:
+                        result = {"reasoning_content": thinking_content}
+                        if after_close:
+                            result["content"] = after_close
+                        return result, True
+                    # Just the closing tag, return content after it
+                    return after_close if after_close else None, True
+                else:
+                    # No thinking tags in this chunk, treat all content as thinking
+                    self.is_thinking = True
+                    return {
+                        "reasoning_content": chunk
+                    }, False
         
         # Currently in thinking mode
         if self.thinking_close in chunk:
