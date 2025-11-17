@@ -1,6 +1,7 @@
 import json
-from json_repair import repair_json
 from typing import Any, Dict, List, Optional, Tuple
+
+from json_repair import repair_json
 
 
 class BaseThinkingParser:
@@ -11,7 +12,7 @@ class BaseThinkingParser:
 
     def get_thinking_open(self):
         return self.thinking_open
-    
+
     def get_thinking_close(self):
         return self.thinking_close
 
@@ -19,17 +20,17 @@ class BaseThinkingParser:
         start_thinking = content.find(self.thinking_open)
         thinking_open_len = len(self.thinking_open)
         thinking_close_len = len(self.thinking_close)
-        
+
         if start_thinking != -1:
             # Normal case: both opening and closing tags present
             start_content = start_thinking + thinking_open_len
             end_thinking = content.find(self.thinking_close, start_content)
-            
+
             if end_thinking == -1:
                 return None, content
-            
+
             thinking_content = content[start_content:end_thinking].strip()
-            remaining_content = content[end_thinking + thinking_close_len:].strip()
+            remaining_content = content[end_thinking + thinking_close_len :].strip()
             return thinking_content, remaining_content
         else:
             # Check if closing tag exists (treat everything before it as thinking content)
@@ -37,47 +38,46 @@ class BaseThinkingParser:
             if end_thinking != -1:
                 # Treat everything before closing tag as thinking content
                 thinking_content = content[:end_thinking].strip()
-                remaining_content = content[end_thinking + thinking_close_len:].strip()
+                remaining_content = content[end_thinking + thinking_close_len :].strip()
                 return thinking_content, remaining_content
-            
+
             # No thinking tags found
             return None, content
-        
-    
+
     def parse_stream(self, chunk: Optional[str] = None) -> Tuple[Optional[Any], bool]:
         """
         Parse streaming chunks for thinking content.
-        
+
         Returns:
-            Tuple[parsed_content, is_complete]: 
+            Tuple[parsed_content, is_complete]:
                 - parsed_content: The parsed chunk (could be str, dict, or None)
                 - is_complete: True if thinking section is complete
         """
         if chunk is None:
             return None, False
-            
+
         if not self.is_thinking:
             # Check if thinking_open is in the chunk
             if self.thinking_open in chunk:
                 self.is_thinking = True
                 start_idx = chunk.find(self.thinking_open)
-                after_open = chunk[start_idx + len(self.thinking_open):]
+                after_open = chunk[start_idx + len(self.thinking_open) :]
                 before_open = chunk[:start_idx]
-                
+
                 # Check if thinking_close is also in this chunk (both tags in same chunk)
                 if self.thinking_close in after_open:
                     close_idx = after_open.find(self.thinking_close)
                     self.is_thinking = False
                     # Return content before open tag + content after close tag
-                    after_close = after_open[close_idx + len(self.thinking_close):]
-                    return (before_open + after_close) if (before_open + after_close) else None, True
-                
+                    after_close = after_open[close_idx + len(self.thinking_close) :]
+                    return (before_open + after_close) if (
+                        before_open + after_close
+                    ) else None, True
+
                 # Only opening tag found, return content before it (if any) and reasoning content after
                 # If there's content after the opening tag, return it as reasoning_content
                 if after_open:
-                    return {
-                        "reasoning_content": after_open
-                    }, False
+                    return {"reasoning_content": after_open}, False
                 # Just the opening tag with nothing after it
                 return before_open if before_open else None, False
             else:
@@ -87,8 +87,8 @@ class BaseThinkingParser:
                     self.is_thinking = False
                     # Treat everything before closing tag as thinking content
                     thinking_content = chunk[:close_idx]
-                    after_close = chunk[close_idx + len(self.thinking_close):]
-                    
+                    after_close = chunk[close_idx + len(self.thinking_close) :]
+
                     if thinking_content:
                         result = {"reasoning_content": thinking_content}
                         if after_close:
@@ -99,17 +99,15 @@ class BaseThinkingParser:
                 else:
                     # No thinking tags in this chunk, treat all content as thinking
                     self.is_thinking = True
-                    return {
-                        "reasoning_content": chunk
-                    }, False
-        
+                    return {"reasoning_content": chunk}, False
+
         # Currently in thinking mode
         if self.thinking_close in chunk:
             close_idx = chunk.find(self.thinking_close)
             reasoning_part = chunk[:close_idx]
-            after_close = chunk[close_idx + len(self.thinking_close):]
+            after_close = chunk[close_idx + len(self.thinking_close) :]
             self.is_thinking = False
-            
+
             # If there's reasoning content before the close tag, return it with completion signal
             if reasoning_part:
                 result = {"reasoning_content": reasoning_part}
@@ -119,16 +117,16 @@ class BaseThinkingParser:
                 return result, True
             # Close tag found, thinking complete, return content after close tag (if any)
             return after_close if after_close else None, True
-        
+
         # Still in thinking mode, return as reasoning content
-        return {
-            "reasoning_content": chunk
-        }, False
+        return {"reasoning_content": chunk}, False
+
 
 class ParseToolState:
     NORMAL = 0
     FOUND_PREFIX = 1
-  
+
+
 class BaseToolParser:
     def __init__(self, tool_open: str, tool_close: str):
         self.tool_open = tool_open
@@ -138,10 +136,10 @@ class BaseToolParser:
 
     def get_tool_open(self):
         return self.tool_open
-    
+
     def get_tool_close(self):
         return self.tool_close
-    
+
     def _parse_tool_content(self, tool_content: str) -> Optional[Dict[str, Any]]:
         """
         Parses the content of a tool call. Subclasses can override this method
@@ -161,14 +159,14 @@ class BaseToolParser:
     def parse(self, content: str) -> Tuple[Optional[List[Dict[str, Any]]], str]:
         tool_calls = []
         remaining_parts = []
-        
+
         if self.tool_open not in content:
             return [], content
-        
+
         tool_open_len = len(self.tool_open)
         tool_close_len = len(self.tool_close)
         pos = 0
-        
+
         while True:
             start_tool = content.find(self.tool_open, pos)
             if start_tool == -1:
@@ -176,11 +174,11 @@ class BaseToolParser:
                 if pos < len(content):
                     remaining_parts.append(content[pos:].strip())
                 break
-            
+
             # Add content before tool call
             if start_tool > pos:
                 remaining_parts.append(content[pos:start_tool].strip())
-            
+
             # Find closing tag
             search_start = start_tool + tool_open_len
             end_tool = content.find(self.tool_close, search_start)
@@ -188,7 +186,7 @@ class BaseToolParser:
                 # Unclosed tool tag, add remaining content and break
                 remaining_parts.append(content[pos:].strip())
                 break
-            
+
             # Extract and parse tool content
             tool_content = content[search_start:end_tool].strip()
             try:
@@ -199,31 +197,31 @@ class BaseToolParser:
                 # Continue processing remaining content after error
                 remaining_parts.append(content[pos:].strip())
                 break
-            
+
             # Move position past the closing tag
             pos = end_tool + tool_close_len
-        
+
         remaining_content = " ".join(filter(None, remaining_parts))
         return tool_calls, remaining_content
-    
+
     def parse_stream(self, chunk: Optional[str] = None) -> Tuple[Optional[Any], bool]:
         """
         Parse streaming chunks for tool calls.
-        
+
         Returns:
-            Tuple[parsed_content, is_complete]: 
+            Tuple[parsed_content, is_complete]:
                 - parsed_content: The parsed chunk (could be str, dict, or None)
                 - is_complete: True if tool call is complete
         """
         if chunk is None:
             return None, True
-        
+
         if self.tool_open in chunk:
             self.state = ParseToolState.FOUND_PREFIX
             start_tool_index = chunk.find(self.tool_open)
             end_tool_index = chunk.find(self.tool_close)
             if end_tool_index != -1:
-                self.buffer = chunk[start_tool_index + len(self.tool_open):end_tool_index]
+                self.buffer = chunk[start_tool_index + len(self.tool_open) : end_tool_index]
                 self.state = ParseToolState.NORMAL
                 try:
                     json_output = self._parse_tool_content(self.buffer)
@@ -232,11 +230,11 @@ class BaseToolParser:
                     return None, True
                 return {
                     "name": json_output["name"],
-                    "arguments": json.dumps(json_output["arguments"])
+                    "arguments": json.dumps(json_output["arguments"]),
                 }, True
 
-            self.buffer += chunk[start_tool_index + len(self.tool_open):]
-            
+            self.buffer += chunk[start_tool_index + len(self.tool_open) :]
+
             return chunk[:start_tool_index], False
 
         if self.state == ParseToolState.FOUND_PREFIX:
@@ -250,18 +248,21 @@ class BaseToolParser:
                     return None, False
                 return {
                     "name": json_output["name"],
-                    "arguments": json.dumps(json_output["arguments"])
+                    "arguments": json.dumps(json_output["arguments"]),
                 }, True
             else:
                 self.buffer += chunk
                 return None, False
-            
+
         return chunk, False
+
 
 """
 Base Message Converter
 Provides generic conversion from OpenAI API message format to model-compatible format.
 """
+
+
 class BaseMessageConverter:
     """Base message format converter class"""
 
