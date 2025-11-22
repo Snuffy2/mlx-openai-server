@@ -50,6 +50,7 @@ def print_startup_banner(config_args: MLXServerConfig) -> None:
         logger.info(f"🔮 Context Length: {config_args.context_length}")
     logger.info(f"🌐 Host: {config_args.host}")
     logger.info(f"🔌 Port: {config_args.port}")
+    logger.info(f"🧩 API Surface: {config_args.api_mode}")
     logger.info(f"⚡ Max Concurrency: {config_args.max_concurrency}")
     logger.info(f"⏱️ Queue Timeout: {config_args.queue_timeout} seconds")
     logger.info(f"📊 Queue Size: {config_args.queue_size}")

@@ -42,7 +42,8 @@ import mlx.core as mx
 from starlette.responses import Response
 import uvicorn
 
-from .api.endpoints import router
+from .api.endpoints import router as openai_router
+from .api.ollama_endpoints import router as ollama_router
 from .config import MLXServerConfig
 from .handler import MFLUX_AVAILABLE, MLXFluxHandler
 from .handler.mlx_embeddings import MLXEmbeddingsHandler
@@ -509,6 +510,8 @@ class IdleAutoUnloadController:
         self._event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._active = False
+        self._hold_until: float | None = None
+        self._hold_forever = False
 
     @property
     def auto_unload_minutes(self) -> int | None:
@@ -558,6 +561,48 @@ class IdleAutoUnloadController:
         if self._active:
             self._event.set()
 
+    def request_hold(self, hold_seconds: int) -> None:
+        """Request that the handler remain loaded for a duration.
+
+        Parameters
+        ----------
+        hold_seconds : int
+            Number of seconds to suppress auto-unload. ``-1`` holds
+            indefinitely until cleared.
+        """
+
+        if hold_seconds < 0:
+            self._hold_forever = True
+            self._hold_until = None
+            self.notify_activity()
+            return
+        if hold_seconds == 0:
+            self.clear_hold()
+            return
+        deadline = time.monotonic() + hold_seconds
+        if self._hold_until is None or deadline > self._hold_until:
+            self._hold_until = deadline
+        self._hold_forever = False
+        self.notify_activity()
+
+    def clear_hold(self) -> None:
+        """Clear any outstanding keep-alive hold requests."""
+
+        self._hold_forever = False
+        self._hold_until = None
+
+    def _hold_active(self) -> bool:
+        """Return True when keep_alive hold is still active."""
+
+        if self._hold_forever:
+            return True
+        if self._hold_until is None:
+            return False
+        if time.monotonic() < self._hold_until:
+            return True
+        self._hold_until = None
+        return False
+
     async def _watch_loop(self) -> None:
         """Background loop that monitors for idle periods and unloads handlers.
 
@@ -587,6 +632,9 @@ class IdleAutoUnloadController:
                 wait_duration = min(idle_remaining, self.WATCH_LOOP_MAX_WAIT_SECONDS)
 
                 if wait_duration <= 0:
+                    if self._hold_active():
+                        await asyncio.sleep(self.WATCH_LOOP_MAX_WAIT_SECONDS)
+                        continue
                     await self.handler_manager.unload(
                         f"Idle for {self.auto_unload_minutes} minutes"
                     )
@@ -595,6 +643,8 @@ class IdleAutoUnloadController:
                 try:
                     await asyncio.wait_for(self._event.wait(), timeout=wait_duration)
                 except TimeoutError:
+                    if self._hold_active():
+                        continue
                     if self.handler_manager.seconds_since_last_activity() >= timeout:
                         await self.handler_manager.unload(
                             f"Idle for {self.auto_unload_minutes} minutes"
@@ -737,10 +787,20 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
         log_level=config_args.log_level,
     )
 
+    if config_args.api_mode == "ollama":
+        app_title = "Ollama-compatible API"
+        app_description = "API for Ollama-compatible chat, generate, and embeddings endpoints"
+    elif config_args.api_mode == "both":
+        app_title = "OpenAI & Ollama-compatible API"
+        app_description = "API exposing both OpenAI and Ollama-compatible endpoints"
+    else:
+        app_title = "OpenAI-compatible API"
+        app_description = "API for OpenAI-compatible chat completion and text embedding"
+
     # Create FastAPI app with the configured lifespan
     app = FastAPI(
-        title="OpenAI-compatible API",
-        description="API for OpenAI-compatible chat completion and text embedding",
+        title=app_title,
+        description=app_description,
         version=__version__,
         lifespan=create_lifespan(config_args),
     )
@@ -763,7 +823,12 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
         }
     ]
 
-    app.include_router(router)
+    if config_args.api_mode in {"openai", "both"}:
+        logger.info("Registering OpenAI-compatible endpoints")
+        app.include_router(openai_router)
+    if config_args.api_mode in {"ollama", "both"}:
+        logger.info("Registering Ollama-compatible endpoints")
+        app.include_router(ollama_router)
     app.add_middleware(RequestTrackingMiddleware)
 
     # Add CORS middleware

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from typing import Literal, cast
 
 import click
 from loguru import logger
@@ -87,7 +88,17 @@ def cli() -> None:
     """
 
 
+ApiMode = Literal["openai", "ollama", "both"]
+
+
 @cli.command(help="Start the MLX OpenAI Server with the supplied flags")
+@click.option(
+    "--api",
+    "api_mode",
+    default="openai",
+    type=click.Choice(["openai", "ollama", "both"], case_sensitive=False),
+    help="Select which API surface to expose (openai, ollama, or both). Defaults to openai.",
+)
 @click.option(
     "--model-path",
     required=True,
@@ -195,6 +206,7 @@ def cli() -> None:
     help="When JIT is enabled, unload the model after idle for this many minutes.",
 )
 def launch(
+    api_mode: ApiMode,
     model_path: str,
     model_type: str,
     context_length: int,
@@ -281,6 +293,8 @@ def launch(
             "--auto-unload-minutes", "--auto-unload-minutes requires --jit to be set."
         )
 
+    normalized_api_mode = cast("ApiMode", api_mode.lower())
+
     args = MLXServerConfig(
         model_path=model_path,
         model_type=model_type,
@@ -304,6 +318,7 @@ def launch(
         trust_remote_code=trust_remote_code,
         jit_enabled=jit_enabled,
         auto_unload_minutes=auto_unload_minutes,
+        api_mode=normalized_api_mode,
     )
 
     asyncio.run(start(args))
