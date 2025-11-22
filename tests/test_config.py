@@ -21,3 +21,17 @@ def test_auto_unload_valid_when_jit_enabled() -> None:
     """Test that auto-unload is valid when JIT is enabled."""
     config = MLXServerConfig(model_path="dummy", jit_enabled=True, auto_unload_minutes=2)
     assert config.auto_unload_minutes == 2
+
+
+def test_api_mode_normalized_to_lowercase() -> None:
+    """api_mode should be normalized to lowercase for comparisons."""
+
+    config = MLXServerConfig(model_path="dummy", api_mode="BOTH")
+    assert config.api_mode == "both"
+
+
+def test_api_mode_rejects_invalid_values() -> None:
+    """api_mode should reject unsupported values with a ValueError."""
+
+    with pytest.raises(ValueError, match="api_mode must be one of"):
+        MLXServerConfig(model_path="dummy", api_mode="invalid")

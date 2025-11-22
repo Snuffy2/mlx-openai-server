@@ -9,6 +9,7 @@ arguments and applying small model-type-specific defaults).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from loguru import logger
 
@@ -45,6 +46,7 @@ class MLXServerConfig:
     trust_remote_code: bool = False
     jit_enabled: bool = False
     auto_unload_minutes: int | None = None
+    api_mode: Literal["openai", "ollama", "both"] = "openai"
 
     # Used to capture raw CLI input before processing
     lora_paths_str: str | None = None
@@ -111,6 +113,11 @@ class MLXServerConfig:
 
         if isinstance(self.log_level, str):
             self.log_level = self.log_level.upper()
+
+        # Normalize API selection and validate allowed values
+        self.api_mode = self.api_mode.lower()  # type: ignore[assignment]
+        if self.api_mode not in {"openai", "ollama", "both"}:
+            raise ValueError("api_mode must be one of 'openai', 'ollama', or 'both'")
 
     @property
     def model_identifier(self) -> str:
