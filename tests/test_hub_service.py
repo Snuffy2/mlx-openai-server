@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import threading
-import time
 
 import pytest
 
@@ -80,9 +79,9 @@ def _start_service(
 
 
 def _write_hub_yaml(tmp_path: Path, *, test_id: str) -> tuple[Path, Path]:
-    """Create a hub.yaml with a short /tmp-backed log directory."""
+    """Create a hub.yaml with a test-isolated log directory under /tmp."""
 
-    log_dir = Path("/tmp") / f"mlx-hub-test-{test_id}-{time.time_ns()}"
+    log_dir = Path("/tmp") / f"hub-{test_id}"
     log_dir.mkdir(parents=True, exist_ok=True)
     hub_yaml = tmp_path / f"{test_id}.yaml"
     hub_yaml.write_text(

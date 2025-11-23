@@ -61,7 +61,7 @@ Validation highlights:
 | `hub stop` | Reloads one last time, requests shutdown, and confirms via flash message. |
 | `hub load MODEL [...]` | Reloads then calls `start_model` for each name; surfaces OpenAI-style 429 errors when groups are saturated. |
 | `hub unload MODEL [...]` | Reloads then calls `stop_model` for each name. |
-| `hub watch [--interval N]` | Streams `/hub/status` snapshots with uptime, exit codes, and log filenames.
+| `hub watch [--interval N]` | Streams `/hub/status` snapshots with uptime, exit codes, and log filenames. |
 
 Flash helper tones (`info`, `success`, `warning`, `error`) mirror the HTML dashboard styles so operators see consistent feedback across surfaces.
 

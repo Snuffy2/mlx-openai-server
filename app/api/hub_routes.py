@@ -219,7 +219,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             </div>
             <div>
                 <div class="actions">
-                    <button id="refresh-btn" type="button">Refresh</button>
+                    <button class="refresh-btn" type="button">Refresh</button>
                     <button class="action-btn" type="button" data-service-action="start">Start</button>
                     <button class="action-btn action-btn--secondary" type="button" data-service-action="reload">Reload</button>
                     <button class="action-btn action-btn--secondary" type="button" data-service-action="stop">Stop</button>
@@ -232,7 +232,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             </div>
             <div>
                 <div class=\"muted\">Controls</div>
-                <button id=\"refresh-btn\" type=\"button\">Refresh</button>
+                <button class=\"refresh-btn\" type=\"button\">Refresh</button>
             </div>
         </div>
         <div id=\"warnings\" class=\"warnings\" hidden>
@@ -509,7 +509,9 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             }
         }
 
-        document.getElementById('refresh-btn').addEventListener('click', fetchSnapshot);
+        document.querySelectorAll('.refresh-btn').forEach(btn => {
+            btn.addEventListener('click', fetchSnapshot);
+        });
         attachServiceActionListeners();
         fetchSnapshot();
         setInterval(fetchSnapshot, REFRESH_INTERVAL_MS);
@@ -852,7 +854,7 @@ def get_configured_model_id(raw_request: Request) -> str | None:
     """
     config = getattr(raw_request.app.state, "server_config", None)
     if config is not None:
-        return getattr(config, "model_identifier", getattr(config, "model_path", None))
+        return getattr(config, "model_identifier") or getattr(config, "model_path", None)
 
     cached = get_cached_model_metadata(raw_request)
     if cached is not None:

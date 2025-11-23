@@ -47,10 +47,10 @@ class ManagedProcess:
 
 
 def _import_launch_single_model() -> Callable[[MLXServerConfig], Awaitable[None]]:
-    """Import ``launch_single_model`` lazily to avoid circular imports."""
+    """Import ``start`` lazily to avoid circular imports."""
 
     module = importlib.import_module("app.main")
-    return cast("Callable[[MLXServerConfig], Awaitable[None]]", getattr(module, "start"))
+    return cast("Callable[[MLXServerConfig], Awaitable[None]]", module.start)
 
 
 class MultiprocessingModelProcess(ManagedProcess):
@@ -78,7 +78,9 @@ class MultiprocessingModelProcess(ManagedProcess):
     def stop(self, timeout: float = 10.0) -> None:
         """Terminate the process and wait for it to exit."""
 
-        if not self._started or not self._process.is_alive():
+        if not self._started:
+            return
+        if not self._process.is_alive():
             self._process.join(timeout=0)
             return
         self._process.terminate()
@@ -134,6 +136,7 @@ class HubProcessRecord:
     stopped_at: float | None = None
     exit_code: int | None = None
     group_slot_released: bool = False
+    exit_handled: bool = False
 
     def refresh(self) -> None:
         """Update cached exit code information from the underlying process."""
@@ -438,7 +441,8 @@ class HubManager:
             raise HubProcessError(f"Failed to stop process for model '{name}': {exc}") from exc
         record.refresh()
         self._release_group_slot_locked(record)
-        self._observability.model_stopped(record.context(), exit_code=record.exit_code)
+        if not record.exit_handled:
+            self._observability.model_stopped(record.context(), exit_code=record.exit_code)
         if update_structures:
             self._records.pop(name, None)
 
@@ -519,6 +523,9 @@ class HubManager:
             The record whose process exited.
         """
 
+        if record.exit_handled:
+            return
+        record.exit_handled = True
         self._release_group_slot_locked(record)
         if record.exit_code == 0:
             self._observability.model_stopped(record.context(), exit_code=record.exit_code)

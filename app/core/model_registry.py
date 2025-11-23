@@ -14,7 +14,7 @@ _UNSET = object()
 
 
 class ModelRegistry:
-    """Thread-safe registry for model handlers and metadata."""
+    """Asyncio event-loop-safe registry for model handlers and metadata."""
 
     def __init__(self) -> None:
         self._handlers: dict[str, Any | None] = {}

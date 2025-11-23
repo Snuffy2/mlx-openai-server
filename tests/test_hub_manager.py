@@ -211,7 +211,7 @@ def test_hub_manager_releases_group_slot_after_crash(tmp_path: Path) -> None:
     crashing = factory.last("alpha")
     crashing.force_exit(7)
     manager.get_status()
-    assert manager._group_usage["tier"] == 0  # noqa: SLF001 - internal health signal
+    assert manager._group_usage["tier"] == 0  # internal health signal
 
     _write_hub_config(
         config_path,

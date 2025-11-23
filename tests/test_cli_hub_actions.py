@@ -119,7 +119,8 @@ def test_hub_load_cli_requires_model_names(hub_config_file: Path) -> None:
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "load"])
 
     assert result.exit_code != 0
-    assert "Missing argument 'MODEL_NAMES...'" in result.output
+    assert "Missing argument" in result.output
+    assert "MODEL_NAMES" in result.output
 
 
 def test_render_watch_table_formats_columns() -> None:

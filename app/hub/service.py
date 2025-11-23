@@ -18,6 +18,7 @@ import signal
 import sys
 import threading
 import time
+from types import FrameType
 from typing import Any, cast
 
 from loguru import logger
@@ -98,22 +99,23 @@ class HubService:
 
         self._manager.reload()
 
-        address = str(self._paths.socket_path)
-        with Listener(address, family="AF_UNIX", authkey=HUB_SERVICE_AUTH_KEY) as listener:
-            self._listener = listener
-            if ready_event is not None:
-                ready_event.set()
-            while not self._stop_event.is_set():
-                try:
-                    conn = listener.accept()
-                except (OSError, EOFError):
-                    if self._stop_event.is_set():
-                        break
-                    continue
-                threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
-
-        self._cleanup()
-        logger.info("Hub manager service stopped")
+        try:
+            address = str(self._paths.socket_path)
+            with Listener(address, family="AF_UNIX", authkey=HUB_SERVICE_AUTH_KEY) as listener:
+                self._listener = listener
+                if ready_event is not None:
+                    ready_event.set()
+                while not self._stop_event.is_set():
+                    try:
+                        conn = listener.accept()
+                    except (OSError, EOFError):
+                        if self._stop_event.is_set():
+                            break
+                        continue
+                    threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
+        finally:
+            self._cleanup()
+            logger.info("Hub manager service stopped")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -122,11 +124,11 @@ class HubService:
     def _install_signal_handlers(self) -> None:
         """Install signal handlers for graceful shutdown and reload."""
 
-        def _stop_handler(signum: int, _frame: Any) -> None:
+        def _stop_handler(signum: int, _frame: FrameType | None) -> None:
             logger.info("Received signal %s; shutting down hub manager", signum)
             self._request_stop()
 
-        def _reload_handler(signum: int, _frame: Any) -> None:
+        def _reload_handler(signum: int, _frame: FrameType | None) -> None:
             logger.info("Received signal %s; reloading hub configuration", signum)
             try:
                 self._manager.reload()
@@ -503,8 +505,19 @@ def start_hub_service_process(config_path: Path | str) -> int:
 
     ctx = get_context("spawn")
     proc = ctx.Process(target=_service_process_entrypoint, args=(str(config_path),), daemon=False)
-    proc.start()
-    return proc.pid or 0
+    try:
+        proc.start()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to start hub service process for config {config_path}: {exc}"
+        ) from exc
+
+    if not proc.pid:
+        raise RuntimeError(
+            f"Hub service process failed to start for config {config_path}: no PID assigned"
+        )
+
+    return proc.pid
 
 
 def _service_process_entrypoint(config_path: str) -> None:

@@ -293,9 +293,9 @@ def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
 @cli.command(help="Start the MLX OpenAI Server with the supplied flags")
 @click.option(
     "--model-path",
-    required=False,
+    required=True,
     type=str,
-    help="Path to the model (required). Accepts local paths or Hugging Face repository IDs (e.g., 'blackforestlabs/FLUX.1-dev').",
+    help="Path to the model. Accepts local paths or Hugging Face repository IDs (e.g., 'blackforestlabs/FLUX.1-dev').",
 )
 @click.option(
     "--model-type",
@@ -399,7 +399,7 @@ def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
     help="When JIT is enabled, unload the model after idle for this many minutes.",
 )
 def launch(
-    model_path: str | None,
+    model_path: str,
     model_type: str,
     context_length: int,
     port: int,
@@ -480,12 +480,6 @@ def launch(
     click.BadOptionUsage
         If auto_unload_minutes is set without jit_enabled.
     """
-    if model_path is None:
-        raise click.BadOptionUsage(
-            "--model-path",
-            "--model-path is required. Use 'mlx-openai-server hub start' for hub deployments.",
-        )
-
     if auto_unload_minutes is not None and not jit_enabled:
         raise click.BadOptionUsage(
             "--auto-unload-minutes", "--auto-unload-minutes requires --jit to be set."
@@ -742,7 +736,7 @@ def hub_watch(ctx: click.Context, interval: float) -> None:
             if not client.is_available():
                 click.echo(
                     click.style(
-                        "[watch] hub manager is not running; start it with 'mlx-openai-server hub start'",
+                        "Hub manager is not running. Start it via 'mlx-openai-server hub start'.",
                         fg="yellow",
                     )
                 )

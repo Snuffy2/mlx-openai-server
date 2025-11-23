@@ -117,9 +117,13 @@ class MLXServerConfig:
 
         if self.name is not None:
             self.name = self.name.strip()
+            if not self.name:
+                self.name = None
 
         if self.group is not None:
             self.group = self.group.strip()
+            if not self.group:
+                self.group = None
 
     @property
     def model_identifier(self) -> str:

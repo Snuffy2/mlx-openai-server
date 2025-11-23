@@ -74,12 +74,12 @@ class _FakeHandlerManager:
 
         self.recorded_activity = True
 
-    async def ensure_loaded(self, reason: str = "manual") -> _FakeHandler:
+    async def ensure_loaded(self, _reason: str = "manual") -> _FakeHandler:
         """Mark the handler as loaded and fire callbacks.
 
         Parameters
         ----------
-        reason : str, default="manual"
+        _reason : str, default="manual"
             Human-readable context for debugging.
 
         Returns
@@ -92,12 +92,12 @@ class _FakeHandlerManager:
             self._on_change(self._handler)
         return self._handler
 
-    async def unload(self, reason: str = "manual") -> bool:
+    async def unload(self, _reason: str = "manual") -> bool:
         """Mark the handler as unloaded and fire callbacks.
 
         Parameters
         ----------
-        reason : str, default="manual"
+        _reason : str, default="manual"
             Human-readable context for debugging.
 
         Returns
