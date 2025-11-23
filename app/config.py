@@ -45,6 +45,9 @@ class MLXServerConfig:
     trust_remote_code: bool = False
     jit_enabled: bool = False
     auto_unload_minutes: int | None = None
+    name: str | None = None
+    group: str | None = None
+    is_default_model: bool = False
 
     # Used to capture raw CLI input before processing
     lora_paths_str: str | None = None
@@ -111,6 +114,12 @@ class MLXServerConfig:
 
         if isinstance(self.log_level, str):
             self.log_level = self.log_level.upper()
+
+        if self.name is not None:
+            self.name = self.name.strip()
+
+        if self.group is not None:
+            self.group = self.group.strip()
 
     @property
     def model_identifier(self) -> str:

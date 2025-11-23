@@ -8,13 +8,24 @@ the ASGI server.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
+from pathlib import Path
 import sys
+import time
+from typing import Any, Literal
 
 import click
 from loguru import logger
 
 from .config import MLXServerConfig
 from .handler.parser.factory import PARSER_REGISTRY
+from .hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
+from .hub.service import (
+    HubServiceClient,
+    HubServiceError,
+    get_service_paths,
+    start_hub_service_process,
+)
 from .main import start
 from .version import __version__
 
@@ -87,11 +98,204 @@ def cli() -> None:
     """
 
 
+def _load_hub_config_or_fail(config_path: str | None) -> MLXHubConfig:
+    try:
+        return load_hub_config(config_path)
+    except HubConfigError as exc:  # pragma: no cover - CLI friendly errors
+        raise click.ClickException(str(exc)) from exc
+
+
+def _build_service_client(config: MLXHubConfig) -> HubServiceClient:
+    paths = get_service_paths(config)
+    return HubServiceClient(paths.socket_path)
+
+
+def _print_hub_status(
+    config: MLXHubConfig,
+    *,
+    model_names: Iterable[str] | None = None,
+    live_status: dict[str, Any] | None = None,
+) -> None:
+    click.echo(f"Hub log path: {config.log_path}")
+    click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
+
+    selection = None
+    if model_names:
+        selection = {name.strip() for name in model_names if name.strip()}
+    configured = []
+    for model in config.models:
+        if selection and model.name not in selection:
+            continue
+        configured.append(model)
+
+    if not configured:
+        click.echo("No matching models in hub config")
+        return
+
+    live_lookup: dict[str, dict[str, Any]] = {}
+    if live_status:
+        for entry in live_status.get("models", []):
+            name = entry.get("name")
+            if isinstance(name, str):
+                live_lookup[name] = entry
+
+    name_width = max(len(model.name or "<unnamed>") for model in configured)
+    click.echo("Models:")
+    for model in configured:
+        name = model.name or "<unnamed>"
+        live = live_lookup.get(name)
+        state = (live or {}).get("state", "inactive")
+        pid = (live or {}).get("pid") or "-"
+        log_target = model.log_file or "<hub managed>"
+        group = model.group or "<none>"
+        default_flag = "⭐ auto" if model.is_default_model else "on-demand"
+        click.echo(
+            f"  - {name:<{name_width}} | state={state} | pid={pid} | "
+            f"group={group} | log={log_target} | {default_flag}"
+        )
+
+
+_FLASH_STYLES: dict[str, tuple[str, str]] = {
+    "info": ("[info]", "cyan"),
+    "success": ("[ok]", "green"),
+    "warning": ("[warn]", "yellow"),
+    "error": ("[err]", "red"),
+}
+
+
+def _flash(message: str, tone: Literal["info", "success", "warning", "error"] = "info") -> None:
+    """Emit a short, colorized status line for CLI actions."""
+
+    prefix, color = _FLASH_STYLES.get(tone, _FLASH_STYLES["info"])
+    click.echo(click.style(f"{prefix} {message}", fg=color))
+
+
+def _format_name_list(values: Iterable[str] | None) -> str:
+    if not values:
+        return "none"
+    filtered = [value for value in values if value]
+    return ", ".join(filtered) if filtered else "none"
+
+
+def _emit_reload_summary(diff: dict[str, Any], *, header: str) -> None:
+    started = _format_name_list(diff.get("started"))
+    stopped = _format_name_list(diff.get("stopped"))
+    unchanged = _format_name_list(diff.get("unchanged"))
+    tone: Literal["info", "success"] = (
+        "success" if started != "none" or stopped != "none" else "info"
+    )
+    _flash(f"{header}: started={started} | stopped={stopped} | unchanged={unchanged}", tone=tone)
+
+
+def _reload_or_fail(client: HubServiceClient, *, header: str) -> dict[str, Any]:
+    try:
+        diff = client.reload()
+    except HubServiceError as exc:
+        raise click.ClickException(f"Hub reload failed: {exc}") from exc
+    _emit_reload_summary(diff, header=header)
+    return diff
+
+
+def _require_service_client(config: MLXHubConfig) -> HubServiceClient:
+    client = _build_service_client(config)
+    if not client.is_available():
+        raise click.ClickException(
+            "Hub manager is not running. Start it via 'mlx-openai-server hub start'."
+        )
+    return client
+
+
+def _format_duration(seconds: float | None) -> str:
+    """Return a compact human-readable duration string."""
+
+    if seconds is None or seconds < 0:
+        return "-"
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def _render_watch_table(models: Iterable[dict[str, Any]], *, now: float | None = None) -> str:
+    """Return a formatted table describing hub-managed processes."""
+
+    snapshot = list(models)
+    if not snapshot:
+        return "  (no managed processes)"
+
+    reference = now if isinstance(now, (int, float)) else time.time()
+    headers = ["NAME", "STATE", "PID", "GROUP", "UPTIME", "EXIT", "LOG"]
+    rows: list[dict[str, str]] = []
+    for entry in sorted(snapshot, key=lambda item: str(item.get("name", "?"))):
+        name = str(entry.get("name", "?"))
+        state = str(entry.get("state", "unknown")).upper()
+        pid = str(entry.get("pid") or "-")
+        group = entry.get("group") or "-"
+        started_at = entry.get("started_at")
+        uptime = "-"
+        if isinstance(started_at, (int, float)):
+            uptime = _format_duration(reference - float(started_at))
+        exit_code = entry.get("exit_code")
+        exit_display = "-" if exit_code in (None, 0) else str(exit_code)
+        log_path = entry.get("log_path")
+        log_display = Path(log_path).name if isinstance(log_path, str) else "-"
+        rows.append(
+            {
+                "NAME": name,
+                "STATE": state,
+                "PID": pid,
+                "GROUP": group,
+                "UPTIME": uptime,
+                "EXIT": exit_display,
+                "LOG": log_display,
+            }
+        )
+
+    widths: dict[str, int] = {header: len(header) for header in headers}
+    for row in rows:
+        for header in headers:
+            widths[header] = max(widths[header], len(row[header]))
+
+    divider = "  " + "-+-".join("-" * widths[header] for header in headers)
+    header_line = "  " + " | ".join(header.ljust(widths[header]) for header in headers)
+    lines = [header_line, divider]
+    lines.extend(
+        "  " + " | ".join(row[header].ljust(widths[header]) for header in headers) for row in rows
+    )
+    return "\n".join(lines)
+
+
+def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
+    timestamp = snapshot.get("timestamp")
+    reference = timestamp if isinstance(timestamp, (int, float)) else time.time()
+    formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(reference))
+
+    raw_models = snapshot.get("models")
+    models: list[dict[str, Any]] = raw_models if isinstance(raw_models, list) else []
+    running = sum(1 for entry in models if str(entry.get("state")).lower() == "running")
+    stopped = sum(1 for entry in models if str(entry.get("state")).lower() == "stopped")
+    failed = sum(
+        1
+        for entry in models
+        if str(entry.get("state")).lower() == "failed" or entry.get("exit_code") not in (None, 0)
+    )
+
+    click.echo(
+        f"[{formatted}] models={len(models)} running={running} stopped={stopped} failed={failed}"
+    )
+    click.echo(_render_watch_table(models, now=reference))
+
+
 @cli.command(help="Start the MLX OpenAI Server with the supplied flags")
 @click.option(
     "--model-path",
-    required=True,
-    help="Path to the model (required for lm, multimodal, embeddings, image-generation, image-edit, whisper model types). Can be a local path or Hugging Face repository ID (e.g., 'blackforestlabs/FLUX.1-dev').",
+    required=False,
+    type=str,
+    help="Path to the model (required). Accepts local paths or Hugging Face repository IDs (e.g., 'blackforestlabs/FLUX.1-dev').",
 )
 @click.option(
     "--model-type",
@@ -195,7 +399,7 @@ def cli() -> None:
     help="When JIT is enabled, unload the model after idle for this many minutes.",
 )
 def launch(
-    model_path: str,
+    model_path: str | None,
     model_type: str,
     context_length: int,
     port: int,
@@ -226,8 +430,8 @@ def launch(
 
     Parameters
     ----------
-    model_path : str
-        Path to the model (required for lm, multimodal, embeddings, image-generation, image-edit, whisper model types).
+    model_path : str or None
+        Path to the model loaded by the single-model server.
     model_type : str
         Type of model to run (lm: text-only, multimodal: text+vision+audio, image-generation: flux image generation, image-edit: flux image edit, embeddings: text embeddings, whisper: audio transcription).
     context_length : int
@@ -276,10 +480,18 @@ def launch(
     click.BadOptionUsage
         If auto_unload_minutes is set without jit_enabled.
     """
+    if model_path is None:
+        raise click.BadOptionUsage(
+            "--model-path",
+            "--model-path is required. Use 'mlx-openai-server hub start' for hub deployments.",
+        )
+
     if auto_unload_minutes is not None and not jit_enabled:
         raise click.BadOptionUsage(
             "--auto-unload-minutes", "--auto-unload-minutes requires --jit to be set."
         )
+
+    assert model_path is not None
 
     args = MLXServerConfig(
         model_path=model_path,
@@ -307,3 +519,246 @@ def launch(
     )
 
     asyncio.run(start(args))
+
+
+@cli.group(help="Manage hub-based multi-model deployments", invoke_without_command=True)
+@click.option(
+    "--config",
+    "hub_config_path",
+    default=None,
+    help=f"Path to hub YAML (default: {DEFAULT_HUB_CONFIG_PATH})",
+)
+@click.pass_context
+def hub(
+    ctx: click.Context,
+    hub_config_path: str | None,
+) -> None:
+    """Entry point for hub sub-commands."""
+
+    ctx.ensure_object(dict)
+    ctx.obj["hub_config_path"] = hub_config_path
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(hub_start)
+
+
+@hub.command(name="start", help="Start the hub manager service in the background")
+@click.argument("model_names", nargs=-1)
+@click.pass_context
+def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+    """Launch the long-lived hub manager process and report status.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    model_names : tuple[str, ...]
+        Names of models to start.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _build_service_client(config)
+    models = model_names or None
+
+    if client.is_available():
+        _flash("Hub manager already running", tone="warning")
+        try:
+            snapshot = client.status()
+        except HubServiceError as exc:
+            _flash(f"Unable to fetch live status: {exc}", tone="warning")
+            snapshot = None
+        _print_hub_status(config, model_names=models, live_status=snapshot)
+        return
+
+    if config.source_path is None:
+        raise click.ClickException(
+            "Hub configuration must be loaded from disk. Provide --config to specify a file."
+        )
+
+    pid = start_hub_service_process(config.source_path)
+    _flash(f"Launching hub manager (pid={pid})", tone="info")
+    if not client.wait_until_available(timeout=20.0):
+        raise click.ClickException("Hub manager failed to start within 20 seconds")
+
+    _flash("Hub manager is now running", tone="success")
+    try:
+        snapshot = client.status()
+    except HubServiceError as exc:
+        _flash(f"Unable to fetch live status: {exc}", tone="warning")
+        snapshot = None
+    _print_hub_status(config, model_names=models, live_status=snapshot)
+
+
+@hub.command(name="status", help="Show hub configuration and running processes")
+@click.argument("model_names", nargs=-1)
+@click.pass_context
+def hub_status(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+    """Display configured models and any active processes.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    model_names : tuple[str, ...]
+        Names of models to show status for.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _build_service_client(config)
+    snapshot = None
+    if client.is_available():
+        _reload_or_fail(client, header="Config synced")
+        try:
+            snapshot = client.status()
+        except HubServiceError as exc:
+            _flash(f"Unable to fetch live status: {exc}", tone="warning")
+    else:
+        _flash("Hub manager is not running", tone="warning")
+    _print_hub_status(config, model_names=model_names or None, live_status=snapshot)
+
+
+@hub.command(name="reload", help="Reload hub.yaml and reconcile model processes")
+@click.pass_context
+def hub_reload(ctx: click.Context) -> None:
+    """Force the running hub manager to reload its configuration.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _require_service_client(config)
+    _reload_or_fail(client, header="Hub reload complete")
+
+
+@hub.command(name="stop", help="Stop the hub manager service and all models")
+@click.pass_context
+def hub_stop(ctx: click.Context) -> None:
+    """Shut down the hub manager and terminate all managed models.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _require_service_client(config)
+    _reload_or_fail(client, header="Config synced before shutdown")
+    try:
+        client.shutdown()
+    except HubServiceError as exc:
+        raise click.ClickException(f"Hub shutdown failed: {exc}") from exc
+    _flash("Hub manager shutdown requested", tone="success")
+
+
+@hub.command(name="load", help="Start one or more model processes")
+@click.argument("model_names", nargs=-1, required=True)
+@click.pass_context
+def hub_load(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+    """Trigger process launches for the provided model names.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    model_names : tuple[str, ...]
+        Names of models to load.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _require_service_client(config)
+    _reload_or_fail(client, header="Config synced before load")
+    for raw_name in model_names:
+        target = raw_name.strip()
+        if not target:
+            _flash("Skipping blank model name entry", tone="warning")
+            continue
+        try:
+            client.start_model(target)
+        except HubServiceError as exc:
+            _flash(f"{target}: load failed ({exc})", tone="error")
+        else:
+            _flash(f"{target}: start requested", tone="success")
+
+
+@hub.command(name="unload", help="Stop one or more model processes")
+@click.argument("model_names", nargs=-1, required=True)
+@click.pass_context
+def hub_unload(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+    """Stop running processes for the provided model names.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    model_names : tuple[str, ...]
+        Names of models to unload.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _require_service_client(config)
+    _reload_or_fail(client, header="Config synced before unload")
+    for raw_name in model_names:
+        target = raw_name.strip()
+        if not target:
+            _flash("Skipping blank model name entry", tone="warning")
+            continue
+        try:
+            client.stop_model(target)
+        except HubServiceError as exc:
+            _flash(f"{target}: unload failed ({exc})", tone="error")
+        else:
+            _flash(f"{target}: stop requested", tone="success")
+
+
+@hub.command(name="watch", help="Continuously print live hub manager status")
+@click.option(
+    "--interval",
+    default=5.0,
+    show_default=True,
+    type=float,
+    help="Seconds between refreshes.",
+)
+@click.pass_context
+def hub_watch(ctx: click.Context, interval: float) -> None:
+    """Poll the hub manager service until interrupted.
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Click context.
+    interval : float
+        Seconds between refreshes.
+    """
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    client = _build_service_client(config)
+    click.echo("Watching hub manager (press Ctrl+C to stop)...")
+    sleep_interval = max(interval, 0.5)
+    try:
+        while True:
+            if not client.is_available():
+                click.echo(
+                    click.style(
+                        "[watch] hub manager is not running; start it with 'mlx-openai-server hub start'",
+                        fg="yellow",
+                    )
+                )
+            else:
+                try:
+                    snapshot = client.status()
+                except HubServiceError as exc:
+                    click.echo(click.style(f"[watch] status request failed: {exc}", fg="red"))
+                    click.echo(
+                        click.style(
+                            "        Inspect hub logs (hub status) or restart the service if needed.",
+                            fg="yellow",
+                        )
+                    )
+                else:
+                    _print_watch_snapshot(snapshot)
+            time.sleep(sleep_interval)
+    except KeyboardInterrupt:  # pragma: no cover - interactive command
+        click.echo("Stopped watching hub manager")
