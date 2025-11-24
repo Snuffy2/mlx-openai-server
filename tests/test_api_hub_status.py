@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.hub.runtime import HubRuntime
+
 from app.api.hub_routes import _build_models_from_config
 from app.config import MLXServerConfig
 from app.hub.config import MLXHubConfig
-from app.hub.runtime import HubRuntime
 
 
 def _make_config(tmp_path: Path) -> MLXHubConfig:

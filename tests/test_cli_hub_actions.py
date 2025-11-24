@@ -61,7 +61,15 @@ def test_hub_reload_cli_reloads_service(
     """`hub reload` should trigger a service reload via HubServiceClient."""
 
     stub = _StubServiceClient()
-    monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
+
+    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+        if method == "POST" and path == "/hub/reload":
+            return stub.reload()
+        if method == "GET" and path == "/health":
+            return {"status": "ok"}
+        raise RuntimeError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr("app.cli._call_daemon_api", _call_stub)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "reload"])
@@ -76,13 +84,33 @@ def test_hub_stop_cli_requests_shutdown(
     """`hub stop` should reload config then shut down the service."""
 
     stub = _StubServiceClient()
-    monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
+
     build_calls = {"count": 0}
 
-    def _fake_build(_cfg: object) -> _StubServiceClient:
-        build_calls["count"] += 1
-        return stub
+    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+        # emulate availability check and reload/shutdown behavior
+        if method == "GET" and path == "/health":
+            return {"status": "ok"}
+        if method == "POST" and path == "/hub/reload":
+            return stub.reload()
+        if method == "POST" and path == "/hub/shutdown":
+            stub.shutdown()
+            return {"message": "shutdown"}
+        if method == "POST" and path.startswith("/hub/models/") and path.endswith("/start"):
+            name = path.split("/")[-2]
+            stub.start_model(name)
+            return {"message": "started"}
+        if method == "POST" and path.startswith("/hub/models/") and path.endswith("/stop"):
+            name = path.split("/")[-2]
+            stub.stop_model(name)
+            return {"message": "stopped"}
+        raise RuntimeError(f"unexpected call {method} {path}")
 
+    # emulate a build call count for compatibility with prior tests
+    def _fake_build(_cfg: object) -> None:
+        build_calls["count"] += 1
+
+    monkeypatch.setattr("app.cli._call_daemon_api", _call_stub)
     monkeypatch.setattr("app.cli._build_service_client", _fake_build)
 
     runner = CliRunner()
@@ -102,7 +130,19 @@ def test_hub_start_model_cli_uses_service_client(
     """`hub start-model` should instruct the HubServiceClient to start models."""
 
     stub = _StubServiceClient()
-    monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
+
+    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+        if method == "POST" and path.startswith("/hub/models/") and path.endswith("/start"):
+            name = path.split("/")[-2]
+            stub.start_model(name)
+            return {"message": "started"}
+        if method == "POST" and path == "/hub/reload":
+            return stub.reload()
+        if method == "GET" and path == "/health":
+            return {"status": "ok"}
+        raise RuntimeError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr("app.cli._call_daemon_api", _call_stub)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "start-model", "alpha"])
@@ -118,7 +158,19 @@ def test_hub_stop_model_cli_uses_service_client(
     """`hub stop-model` should request stop_model for the provided names."""
 
     stub = _StubServiceClient()
-    monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
+
+    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+        if method == "POST" and path.startswith("/hub/models/") and path.endswith("/stop"):
+            name = path.split("/")[-2]
+            stub.stop_model(name)
+            return {"message": "stopped"}
+        if method == "POST" and path == "/hub/reload":
+            return stub.reload()
+        if method == "GET" and path == "/health":
+            return {"status": "ok"}
+        raise RuntimeError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr("app.cli._call_daemon_api", _call_stub)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "stop-model", "alpha"])

@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from http import HTTPStatus
-import importlib
 from pathlib import Path
+import subprocess
+import sys
 import time
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+import httpx
 from loguru import logger
 from pydantic import ValidationError
 
 from ..hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
 from ..hub.errors import HubControllerError
 from ..hub.runtime import HubRuntime
-from ..hub.service import (
-    HubServiceClient,
-    HubServiceError,
-    get_service_paths,
-    start_hub_service_process,
-)
 from ..schemas.openai import (
     HubModelActionRequest,
     HubModelActionResponse,
@@ -31,6 +29,53 @@ from ..schemas.openai import (
     Model,
 )
 from ..utils.errors import create_error_response
+
+# The legacy `app.hub.service` shim has been removed. The hub routes now
+# proxy control operations to the hub daemon over HTTP. Tests and other
+# callers may rely on `HubServiceError` for controlled failures, so expose
+# a local exception type with the same shape as the previous shim used.
+
+
+class HubServiceError(RuntimeError):
+    """Raised when the daemon reports a service-level failure.
+
+    Parameters
+    ----------
+    message : str
+        Human-friendly error message.
+    status_code : int | None
+        Optional HTTP status code associated with the error.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def start_hub_service_process(
+    config_path: str, *, host: str | None = None, port: int | None = None
+) -> int:
+    """Start the hub daemon process (development helper).
+
+    This helper launches a uvicorn process in the background using the same
+    Python interpreter. It returns the spawned PID. It is intended as a
+    development convenience for the API's `/hub/service/start` endpoint.
+    """
+    host_val = host or "127.0.0.1"
+    port_val = str(port or 8001)
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "app.hub.daemon:create_app",
+        "--host",
+        host_val,
+        "--port",
+        port_val,
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return proc.pid
+
 
 hub_router = APIRouter()
 
@@ -707,8 +752,16 @@ def _stop_controller_process(config: MLXHubConfig) -> bool:
     bool
         True if the controller was stopped, False otherwise.
     """
-    hub_server = importlib.import_module("app.hub.server")
-    return bool(hub_server.stop_hub_controller_process(config))
+    """Request the daemon to stop the controller/processes.
+
+    The legacy `app.hub.server` module is no longer supported; always use
+    the hub daemon HTTP API to request shutdown.
+    """
+    try:
+        _call_daemon_api_sync(config, "POST", "/hub/shutdown", timeout=1.0)
+    except HubServiceError:
+        return False
+    return True
 
 
 def _load_hub_config_from_request(raw_request: Request) -> MLXHubConfig:
@@ -727,21 +780,96 @@ def _load_hub_config_from_request(raw_request: Request) -> MLXHubConfig:
     return load_hub_config(_resolve_hub_config_path(raw_request))
 
 
-def _build_service_client(config: MLXHubConfig) -> HubServiceClient:
-    """Build a hub service client for the given configuration.
+def _daemon_base_url(config: MLXHubConfig) -> str:
+    """Return the base HTTP URL for the hub daemon for the given config."""
+    host = (config.host or "127.0.0.1").strip()
+    if host in {"0.0.0.0", "::", "[::]"}:
+        host = "127.0.0.1"
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = config.port or 8001
+    return f"http://{host}:{port}"
 
-    Parameters
-    ----------
-    config : MLXHubConfig
-        The hub configuration.
 
-    Returns
-    -------
-    HubServiceClient
-        Configured service client.
+async def _call_daemon_api_async(
+    config: MLXHubConfig,
+    method: str,
+    path: str,
+    *,
+    json: object | None = None,
+    timeout: float = 5.0,
+) -> dict[str, object] | None:
+    """Async call to the hub daemon HTTP API and return parsed JSON.
+
+    Raises HubServiceError on non-2xx responses.
     """
-    paths = get_service_paths(config)
-    return HubServiceClient(paths.socket_path)
+    base = _daemon_base_url(config)
+    url = f"{base.rstrip('/')}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.request(method, url, json=json)
+    except Exception as exc:  # pragma: no cover - network error handling
+        raise HubServiceError(f"Failed to contact hub daemon at {base}: {exc}") from exc
+
+    if resp.status_code >= 400:
+        # Try to parse JSON error
+        payload: object | None
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = resp.text
+        raise HubServiceError(
+            f"Daemon responded {resp.status_code}: {payload}", status_code=resp.status_code
+        )
+
+    if resp.content:
+        try:
+            return resp.json()
+        except Exception:
+            return {"raw": resp.text}
+    return None
+
+
+def _call_daemon_api_sync(
+    config: MLXHubConfig,
+    method: str,
+    path: str,
+    *,
+    json: object | None = None,
+    timeout: float = 1.0,
+) -> dict[str, object] | None:
+    """Synchronous HTTP call to the hub daemon used by sync code paths.
+
+    Raises
+    ------
+    HubServiceError
+        On connectivity failures or non-2xx responses.
+    """
+    base = _daemon_base_url(config)
+    url = f"{base.rstrip('/')}{path}"
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.request(method, url, json=json)
+    except Exception as exc:  # pragma: no cover - network error handling
+        raise HubServiceError(f"Failed to contact hub daemon at {base}: {exc}") from exc
+
+    if resp.status_code >= 400:
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = resp.text
+        raise HubServiceError(
+            f"Daemon responded {resp.status_code}: {payload}", status_code=resp.status_code
+        )
+
+    if resp.content:
+        try:
+            return resp.json()
+        except Exception:
+            return {"raw": resp.text}
+    return None
 
 
 def _service_error_response(action: str, exc: HubServiceError) -> JSONResponse:
@@ -855,23 +983,8 @@ def _controller_error_response(exc: HubControllerError) -> JSONResponse:
     )
 
 
-def _ensure_manager_available(client: HubServiceClient) -> bool:
-    """Check if the hub manager service is available.
-
-    Parameters
-    ----------
-    client : HubServiceClient
-        The service client to check.
-
-    Returns
-    -------
-    bool
-        True if the manager is available.
-    """
-    try:
-        return client.is_available()
-    except HubServiceError:
-        return False
+# Manager availability is determined by proxying to the hub daemon's
+# `/health` endpoint using `_call_daemon_api_async` where appropriate.
 
 
 def _normalize_model_name(model_name: str) -> str:
@@ -1024,12 +1137,8 @@ def get_running_hub_models(raw_request: Request) -> set[str] | None:
     except HubConfigError:
         return None
 
-    client = _build_service_client(config)
-    if not _ensure_manager_available(client):
-        return None
-
     try:
-        snapshot = client.status()
+        snapshot = _call_daemon_api_sync(config, "GET", "/hub/status", timeout=1.0)
     except HubServiceError as exc:
         logger.debug(
             f"Hub manager status unavailable; skipping running model filter. {type(exc).__name__}: {exc}"
@@ -1186,12 +1295,13 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
     except HubConfigError:
         return _build_legacy_hub_status(raw_request)
 
-    client = _build_service_client(config)
     warnings: list[str] = []
     snapshot: dict[str, Any] | None = None
     try:
-        client.reload()
-        snapshot = client.status()
+        # Try to reconcile via daemon then fetch status snapshot
+        with contextlib.suppress(HubServiceError):
+            await _call_daemon_api_async(config, "POST", "/hub/reload")
+        snapshot = await _call_daemon_api_async(config, "GET", "/hub/status")
     except HubServiceError as exc:
         warnings.append(f"Hub manager unavailable: {exc}")
 
@@ -1271,19 +1381,34 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
 
-    client = _build_service_client(config)
-    if _ensure_manager_available(client):
+    # If daemon is already responding, return early
+    try:
+        await _call_daemon_api_async(config, "GET", "/health", timeout=1.0)
         return HubServiceActionResponse(
             status="ok", action="start", message="Hub manager already running."
         )
+    except HubServiceError:
+        pass
 
     if config.source_path is None:
         return _hub_config_error_response(
             "Hub configuration must be saved to disk before starting the manager."
         )
 
-    pid = start_hub_service_process(config.source_path)
-    if not client.wait_until_available(timeout=20.0):
+    pid = start_hub_service_process(str(config.source_path), host=config.host, port=config.port)
+
+    # Wait for daemon to become available
+    deadline = time.time() + 20.0
+    available = False
+    while time.time() < deadline:
+        try:
+            await _call_daemon_api_async(config, "GET", "/health", timeout=1.0)
+            available = True
+            break
+        except HubServiceError:
+            await asyncio.sleep(0.5)
+
+    if not available:
         return JSONResponse(
             content=create_error_response(
                 "Hub manager failed to start within 20 seconds.",
@@ -1294,8 +1419,8 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
         )
 
     try:
-        client.reload()
-        snapshot = client.status()
+        await _call_daemon_api_async(config, "POST", "/hub/reload")
+        snapshot = await _call_daemon_api_async(config, "GET", "/hub/status")
     except HubServiceError as exc:
         snapshot = None
         logger.warning(f"Hub manager started (pid={pid}) but status fetch failed: {exc}")
@@ -1338,21 +1463,18 @@ async def hub_service_stop(raw_request: Request) -> HubServiceActionResponse | J
         return _hub_config_error_response(str(exc))
 
     controller_stopped = _stop_controller_process(config)
-    client = _build_service_client(config)
     manager_shutdown = False
 
-    if _ensure_manager_available(client):
-        try:
-            client.reload()
-        except HubServiceError as exc:
-            return _service_error_response("reload before shutdown", exc)
+    try:
+        # Ask daemon to reload before shutdown; if unavailable we still proceed
+        with contextlib.suppress(HubServiceError):
+            await _call_daemon_api_async(config, "POST", "/hub/reload")
 
-        try:
-            client.shutdown()
-        except HubServiceError as exc:
-            return _service_error_response("stop the hub manager", exc)
-
+        await _call_daemon_api_async(config, "POST", "/hub/shutdown")
         manager_shutdown = True
+    except HubServiceError:
+        # If daemon unreachable, treat as not running
+        manager_shutdown = False
 
     message_parts = [
         "Hub controller stop requested" if controller_stopped else "Hub controller was not running",
@@ -1396,12 +1518,14 @@ async def hub_service_reload(raw_request: Request) -> HubServiceActionResponse |
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
 
-    client = _build_service_client(config)
-    if not _ensure_manager_available(client):
+    try:
+        # Ensure daemon responds to health check
+        await _call_daemon_api_async(config, "GET", "/health")
+    except HubServiceError:
         return _manager_unavailable_response()
 
     try:
-        diff = client.reload()
+        diff = await _call_daemon_api_async(config, "POST", "/hub/reload") or {}
     except HubServiceError as exc:
         return _service_error_response("reload hub configuration", exc)
 
@@ -1437,7 +1561,7 @@ async def hub_start_model(
     """
 
     _ = payload  # reserved for future compatibility
-    return _hub_model_service_action(raw_request, model_name, "start-model")
+    return await _hub_model_service_action(raw_request, model_name, "start-model")
 
 
 @hub_router.post("/hub/models/{model_name}/stop-model", response_model=HubModelActionResponse)
@@ -1464,7 +1588,7 @@ async def hub_stop_model(
     """
 
     _ = payload  # reserved for future compatibility
-    return _hub_model_service_action(raw_request, model_name, "stop-model")
+    return await _hub_model_service_action(raw_request, model_name, "stop-model")
 
 
 @hub_router.post("/hub/models/{model_name}/load-model", response_model=HubModelActionResponse)
@@ -1517,7 +1641,7 @@ async def hub_memory_unload_model(
     return await _hub_memory_controller_action(raw_request, model_name, "unload-model", payload)
 
 
-def _hub_model_service_action(
+async def _hub_model_service_action(
     raw_request: Request,
     model_name: str,
     action: Literal["start-model", "stop-model"],
@@ -1554,21 +1678,22 @@ def _hub_model_service_action(
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
 
-    client = _build_service_client(config)
-    if not _ensure_manager_available(client):
+    try:
+        await _call_daemon_api_async(config, "GET", "/health")
+    except HubServiceError:
         return _manager_unavailable_response()
 
     try:
-        client.reload()
+        await _call_daemon_api_async(config, "POST", "/hub/reload")
     except HubServiceError as exc:
         return _service_error_response("reload before executing the model action", exc)
 
     try:
         if action == "start-model":
-            client.start_model(target)
+            await _call_daemon_api_async(config, "POST", f"/hub/models/{target}/start")
             message = f"Model '{target}' start requested"
         else:
-            client.stop_model(target)
+            await _call_daemon_api_async(config, "POST", f"/hub/models/{target}/stop")
             message = f"Model '{target}' stop requested"
     except HubServiceError as exc:
         friendly = action.replace("-", " ")
