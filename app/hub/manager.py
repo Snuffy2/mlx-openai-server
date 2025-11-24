@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import importlib
 import multiprocessing
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import cast
@@ -48,6 +49,11 @@ class ManagedProcess:
 
 def _import_launch_single_model() -> Callable[[MLXServerConfig], Awaitable[None]]:
     """Import ``start`` lazily to avoid circular imports."""
+
+    # Add the repository root to sys.path to ensure 'app' module is importable
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
     module = importlib.import_module("app.main")
     return cast("Callable[[MLXServerConfig], Awaitable[None]]", module.start)
@@ -119,6 +125,11 @@ def _model_process_entry(config: MLXServerConfig, log_path: str | None) -> None:
             stack.enter_context(stream)
             stack.enter_context(redirect_stdout(stream))
             stack.enter_context(redirect_stderr(stream))
+            # Configure loguru to output to the stream
+            logger.remove()
+            logger.add(
+                stream, level="DEBUG", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+            )
         asyncio.run(_run())
     finally:
         stack.close()
@@ -373,8 +384,15 @@ class HubManager:
                 result.unchanged.append(name)
 
         for name in added:
-            self._start_model_locked(desired[name])
-            result.started.append(name)
+            config_obj = desired[name]
+            if config_obj.is_default_model:
+                self._start_model_locked(config_obj)
+                result.started.append(name)
+            else:
+                logger.info(
+                    f"Model '{name}' configured as on-demand; skipping automatic start",
+                )
+                result.unchanged.append(name)
 
         self._model_configs = desired
         return result

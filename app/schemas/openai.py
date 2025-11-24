@@ -432,7 +432,13 @@ class HubStatusCounts(OpenAIBaseModel):
     """Aggregate counters for hub/registry state."""
 
     registered: int = Field(0, description="Number of models known to the hub registry.")
-    loaded: int = Field(0, description="How many registered models currently report 'initialized'.")
+    loaded: int = Field(
+        0,
+        description=(
+            "Number of models reporting an active memory handler when runtime data is available; "
+            "falls back to process-level 'running' counts otherwise."
+        ),
+    )
 
 
 class HubStatusResponse(OpenAIBaseModel):
@@ -466,10 +472,17 @@ class HubStatusResponse(OpenAIBaseModel):
         default_factory=list,
         description="Non-fatal warnings explaining why the hub status might be degraded.",
     )
+    controller_available: bool = Field(
+        False,
+        description=(
+            "True when this FastAPI instance hosts the hub controller, which enables dashboard "
+            "memory controls and CLI load-model/unload-model commands."
+        ),
+    )
 
 
 class HubModelActionRequest(OpenAIBaseModel):
-    """Request payload for hub model load/unload operations."""
+    """Request payload for hub model lifecycle actions."""
 
     reason: str | None = Field(
         None,
@@ -481,7 +494,10 @@ class HubModelActionResponse(OpenAIBaseModel):
     """Response payload emitted after hub model actions."""
 
     status: Literal["ok"] = Field("ok", description="Indicates the action was accepted.")
-    action: Literal["load", "unload"] = Field(..., description="Action that was performed.")
+    action: Literal["start-model", "stop-model", "load-model", "unload-model"] = Field(
+        ...,
+        description="Action that was performed.",
+    )
     model: str = Field(..., description="Model name targeted by the action.")
     message: str | None = Field(None, description="Additional context about the action outcome.")
 

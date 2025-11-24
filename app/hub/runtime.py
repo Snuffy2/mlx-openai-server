@@ -24,7 +24,7 @@ class HubModelState:
     last_error: str | None = None
     last_transition_at: float = field(default_factory=lambda: time.time())
 
-    def as_summary(self) -> dict[str, str | bool | None]:
+    def as_summary(self) -> dict[str, str | bool | float | None]:
         """Return a CLI-friendly summary of the model state."""
 
         return {
@@ -35,6 +35,8 @@ class HubModelState:
             "default": self.config.is_default_model,
             "log_file": self.config.log_file,
             "status": self.status,
+            "last_error": self.last_error,
+            "last_transition_at": self.last_transition_at,
         }
 
 
@@ -89,7 +91,7 @@ class HubRuntime:
 
     def describe_models(
         self, selection: Iterable[str] | None = None
-    ) -> list[dict[str, str | bool | None]]:
+    ) -> list[dict[str, str | bool | float | None]]:
         """Return serialized summaries for selected models.
 
         Parameters
@@ -99,7 +101,7 @@ class HubRuntime:
 
         Returns
         -------
-        list[dict[str, str | bool | None]]
+        list[dict[str, str | bool | float | None]]
             List of model summaries.
         """
 
@@ -107,15 +109,18 @@ class HubRuntime:
         return [state.as_summary() for state in states]
 
     def bootstrap_targets(self) -> list[str]:
-        """List models that should be eagerly loaded at hub startup.
+        """Return models that should be memory-loaded automatically.
+
+        Auto-loading is now opt-in via explicit controller calls, so this returns an empty
+        list by default.
 
         Returns
         -------
         list[str]
-            Names of models to bootstrap.
+            Names of models slated for automatic memory loading.
         """
 
-        return [name for name, state in self._models.items() if state.config.is_default_model]
+        return []
 
     def can_load(self, name: str) -> bool:
         """Return True when the model can enter the loading state.

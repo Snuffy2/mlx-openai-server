@@ -246,7 +246,7 @@ class HubController:
                     self._registry_tasks.discard(task)
 
     async def _auto_bootstrap(self) -> None:
-        """Load any models flagged as auto-load defaults.
+        """Load any models flagged for automatic memory bootstrap.
 
         Returns
         -------

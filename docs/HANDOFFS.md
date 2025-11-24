@@ -299,11 +299,11 @@ This document tracks session-to-session handoffs for the `mlx-openai-server-lab`
 
 ### Discoveries
 - Group limits are easiest to enforce at the runtime planner level; tracking how many models are in `loading`/`loaded` states per group gives us deterministic capacity enforcement before handlers exist.
-- Reserving slots for default models during `hub start` provides users with actionable insight (which models would be in-flight vs deferred) even before the controller can actually load handlers.
+- Auto-starting default models during `hub start` provides users with actionable insight (which worker processes will be hot vs on-demand) even before the controller loads handlers.
 
 ### Actions Taken
 1. ✅ Extended `HubRuntime` with `can_load`, `mark_loading`, `mark_loaded`, `mark_failed`, and `mark_unloaded`, plus timestamp tracking and per-group usage counters.
-2. ✅ Added `_reserve_bootstrap_slots` so `hub start` now marks default models as `loading` when capacity allows, and surfaces any groups that are already saturated.
+2. ✅ Taught the hub manager to auto-start default models (subject to group limits) so the service spins up only the workers operators flag as defaults.
 3. ✅ Created new regression tests in `tests/test_hub_runtime.py` that cover slot enforcement and transition sequencing to guard future controller work.
 
 ### Next Actions
@@ -333,7 +333,7 @@ This document tracks session-to-session handoffs for the `mlx-openai-server-lab`
 3. ✅ Updated the OpenAI client example to remind readers to switch the `model` argument when targeting a hub deployment and recorded the work in this handoff log.
 
 ### Next Actions
-- Add dedicated CLI usage docs (or `--help` excerpts) once the controller exposes additional verbs such as `hub load`/`hub unload`.
+- Add dedicated CLI usage docs (or `--help` excerpts) once the controller exposes additional verbs such as `hub start-model`/`hub stop-model` and the complementary `hub load-model`/`hub unload-model` pair.
 - Continue refreshing the README as hub orchestration becomes the default experience so the distinction between single-model and hub launches remains obvious.
 
 ### Files Changed
@@ -349,11 +349,11 @@ This document tracks session-to-session handoffs for the `mlx-openai-server-lab`
 
 ### Discoveries
 - The CLI already had helper plumbing for `/hub/status`, so exposing new commands only required lightweight HTTP helpers plus controller endpoints.
-- We needed dedicated API routes for load/unload because the controller previously only ran in-process; adding `/hub/models/{model}/load` and `/hub/models/{model}/unload` keeps the flow uniform for future automation.
+- We needed dedicated API routes for start/stop actions because the controller previously only ran in-process; adding `/hub/models/{model}/start-model` and `/hub/models/{model}/stop-model` keeps the flow uniform for future automation.
 
 ### Actions Taken
 1. ✅ Added `HubModelActionRequest/Response` schemas and new FastAPI routes to proxy controller `load_model`/`unload_model` actions with proper error handling.
-2. ✅ Extended the CLI with `hub load`, `hub unload`, and `hub watch` commands, wiring them to the controller endpoints alongside live status rendering and shared HTTP helpers.
+2. ✅ Extended the CLI with `hub start-model`, `hub stop-model`, and `hub watch` commands, wiring them to the controller endpoints alongside live status rendering and shared HTTP helpers.
 3. ✅ Created integration and CLI regression tests to cover the new endpoints and commands, ensuring HTTP calls are formed correctly and controller failures propagate.
 4. ✅ Updated the README to document the new commands so users know how to manage running hubs interactively.
 

@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.api.hub_routes import hub_router
+from app.hub.errors import HubControllerError
 from app.hub.service import HubServiceError
 from app.server import configure_fastapi_app
 
@@ -72,10 +73,26 @@ class _StubServiceClient:
         _StubServiceClient.state.shutdown_called = True
 
 
+class _StubController:
+    def __init__(self) -> None:
+        self.loaded: list[tuple[str, str]] = []
+        self.unloaded: list[tuple[str, str]] = []
+
+    async def load_model(self, name: str, *, reason: str = "manual") -> None:
+        self.loaded.append((name, reason))
+        if name == "denied":
+            raise HubControllerError("group busy", status_code=HTTPStatus.TOO_MANY_REQUESTS)
+
+    async def unload_model(self, name: str, *, reason: str = "manual") -> None:
+        self.unloaded.append((name, reason))
+        if name == "missing":
+            raise HubControllerError("not loaded", status_code=HTTPStatus.BAD_REQUEST)
+
+
 @pytest.fixture
 def hub_service_app(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[TestClient, _StubServiceState]:
+) -> tuple[TestClient, _StubServiceState, _StubController]:
     """Return a TestClient configured with a stubbed hub service backend."""
     config_dir = tmp_path / "hub-config"
     config_dir.mkdir()
@@ -101,6 +118,8 @@ models:
     app.include_router(hub_router)
     app.state.server_config = SimpleNamespace(enable_status_page=True, host="0.0.0.0", port=8123)
     app.state.hub_config_path = config_path
+    controller = _StubController()
+    app.state.hub_controller = controller
 
     state = _StubServiceState()
     state.status_payload["models"] = [
@@ -124,16 +143,16 @@ models:
 
     client = TestClient(app)
     try:
-        yield client, state
+        yield client, state, controller
     finally:
         client.close()
 
 
 def test_hub_status_uses_service_snapshot(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Hub status endpoint should prefer hub service snapshots when available."""
-    client, state = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = True
 
     response = client.get("/hub/status")
@@ -147,10 +166,10 @@ def test_hub_status_uses_service_snapshot(
 
 
 def test_hub_status_degrades_when_service_unavailable(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Hub status should downgrade to 'degraded' when the service is offline."""
-    client, state = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = False
 
     response = client.get("/hub/status")
@@ -160,39 +179,39 @@ def test_hub_status_degrades_when_service_unavailable(
     assert payload["counts"]["registered"] == 2
 
 
-def test_hub_model_load_calls_service_client(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+def test_hub_model_start_calls_service_client(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
-    """Model load endpoint should call HubServiceClient.start_model after reload."""
-    client, state = hub_service_app
+    """Model start endpoint should call HubServiceClient.start_model after reload."""
+    client, state, _controller = hub_service_app
     state.available = True
 
-    response = client.post("/hub/models/alpha/load", json={})
+    response = client.post("/hub/models/alpha/start-model", json={})
 
     assert response.status_code == HTTPStatus.OK
     assert state.start_calls == ["alpha"]
     assert state.reload_calls == 1
 
 
-def test_hub_model_load_surfaces_capacity_errors(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+def test_hub_model_start_surfaces_capacity_errors(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Capacity errors from HubServiceClient should translate to HTTP 429 responses."""
-    client, state = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = True
 
-    response = client.post("/hub/models/saturated/load", json={})
+    response = client.post("/hub/models/saturated/start-model", json={})
 
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     body = response.json()
-    assert body["error"]["message"].startswith("Failed to load")
+    assert body["error"]["message"].startswith("Failed to start")
 
 
 def test_hub_service_start_spawns_process_when_missing(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """/hub/service/start should spawn the service when it is not running."""
-    client, state = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = False
 
     response = client.post("/hub/service/start")
@@ -205,11 +224,11 @@ def test_hub_service_start_spawns_process_when_missing(
 
 
 def test_hub_service_stop_requires_running_manager(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Stopping the service should fail cleanly when it is not running."""
 
-    client, state = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = False
 
     response = client.post("/hub/service/stop")
@@ -219,11 +238,11 @@ def test_hub_service_stop_requires_running_manager(
 
 
 def test_hub_service_reload_endpoint_returns_diff(
-    hub_service_app: tuple[TestClient, _StubServiceState],
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """/hub/service/reload should surface the diff returned by the service."""
 
-    client, state = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = True
     state.reload_result = {"started": ["alpha"], "stopped": ["beta"], "unchanged": []}
 
@@ -234,3 +253,33 @@ def test_hub_service_reload_endpoint_returns_diff(
     assert body["action"] == "reload"
     assert body["details"] == state.reload_result
     assert state.reload_calls == 1
+
+
+def test_hub_memory_load_invokes_controller(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
+) -> None:
+    """/hub/models/{model}/load-model should call the controller."""
+
+    client, _state, controller = hub_service_app
+
+    response = client.post("/hub/models/alpha/load-model", json={"reason": "dashboard"})
+
+    assert response.status_code == HTTPStatus.OK
+    assert controller.loaded == [("alpha", "dashboard")]
+
+
+def test_hub_memory_actions_surface_controller_errors(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
+) -> None:
+    """Controller-originated failures should propagate to the client."""
+
+    client, _state, controller = hub_service_app
+
+    response = client.post("/hub/models/denied/load-model", json={})
+    assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    payload = response.json()
+    assert "group busy" in payload["error"]["message"]
+
+    response = client.post("/hub/models/missing/unload-model", json={})
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert controller.unloaded[-1] == ("missing", "manual")

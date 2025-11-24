@@ -357,6 +357,10 @@ def load_hub_config(config_path: Path | str | None = None) -> MLXHubConfig:
         group_lookup=group_lookup,
     )
 
+    # Ensure all models inherit the hub's status page setting
+    for model in hub.models:
+        model.enable_status_page = hub.enable_status_page
+
     _validate_group_defaults(hub.models, group_lookup)
 
     logger.info(

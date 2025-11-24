@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import click
 from click.testing import CliRunner
 import pytest
 
@@ -34,6 +35,11 @@ class _StubServiceClient:
         self.stopped: list[str] = []
         self.reload_calls = 0
         self.shutdown_called = False
+        self.is_available_calls = 0
+
+    def is_available(self) -> bool:
+        self.is_available_calls += 1
+        return True
 
     def start_model(self, name: str) -> None:
         self.started.append(name)
@@ -71,52 +77,62 @@ def test_hub_stop_cli_requests_shutdown(
 
     stub = _StubServiceClient()
     monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
+    build_calls = {"count": 0}
+
+    def _fake_build(_cfg: object) -> _StubServiceClient:
+        build_calls["count"] += 1
+        return stub
+
+    monkeypatch.setattr("app.cli._build_service_client", _fake_build)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "stop"])
 
     assert result.exit_code == 0
-    assert stub.reload_calls == 1
+    assert build_calls["count"] == 1
+    assert stub.reload_calls == 1, (
+        f"reloads={stub.reload_calls} availability_checks={stub.is_available_calls}"
+    )
     assert stub.shutdown_called is True
 
 
-def test_hub_load_cli_uses_service_client(
+def test_hub_start_model_cli_uses_service_client(
     monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
 ) -> None:
-    """`hub load` should instruct the HubServiceClient to start models."""
+    """`hub start-model` should instruct the HubServiceClient to start models."""
 
     stub = _StubServiceClient()
     monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "load", "alpha"])
+    result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "start-model", "alpha"])
 
     assert result.exit_code == 0
     assert stub.started == ["alpha"]
     assert stub.reload_calls == 1
 
 
-def test_hub_unload_cli_uses_service_client(
+def test_hub_stop_model_cli_uses_service_client(
     monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
 ) -> None:
-    """`hub unload` should request stop_model for the provided names."""
+    """`hub stop-model` should request stop_model for the provided names."""
 
     stub = _StubServiceClient()
     monkeypatch.setattr("app.cli._require_service_client", lambda _cfg: stub)
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "unload", "alpha"])
+    result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "stop-model", "alpha"])
 
     assert result.exit_code == 0
     assert stub.stopped == ["alpha"]
     assert stub.reload_calls == 1
 
 
-def test_hub_load_cli_requires_model_names(hub_config_file: Path) -> None:
+def test_hub_start_model_cli_requires_model_names(hub_config_file: Path) -> None:
     """The CLI should fail fast if no model names are provided."""
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "load"])
+    result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "start-model"])
 
     assert result.exit_code != 0
     assert "Missing argument" in result.output
@@ -160,3 +176,58 @@ def test_render_watch_table_handles_empty_payload() -> None:
     """The watch table helper should gracefully render empty snapshots."""
 
     assert _render_watch_table([], now=0) == "  (no managed processes)"
+
+
+def test_hub_memory_load_cli_calls_controller(
+    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+) -> None:
+    """`hub load-model` should delegate to the controller helper."""
+
+    captured: list[tuple[tuple[str, ...], str, str]] = []
+
+    def _fake_run_actions(
+        _config: object, names: tuple[str, ...], action: str, *, reason: str
+    ) -> None:
+        captured.append((names, action, reason))
+
+    monkeypatch.setattr("app.cli._run_memory_actions", _fake_run_actions)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "hub",
+            "--config",
+            str(hub_config_file),
+            "load-model",
+            "alpha",
+            "beta",
+            "--reason",
+            "dashboard",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == [(("alpha", "beta"), "load-model", "dashboard")]
+
+
+def test_hub_memory_unload_cli_surfaces_errors(
+    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+) -> None:
+    """`hub unload-model` should propagate helper failures as CLI errors."""
+
+    def _fake_run_actions(
+        _config: object, _names: tuple[str, ...], _action: str, *, reason: str
+    ) -> None:
+        raise click.ClickException(f"boom: {reason}")
+
+    monkeypatch.setattr("app.cli._run_memory_actions", _fake_run_actions)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["hub", "--config", str(hub_config_file), "unload-model", "alpha", "--reason", "test"],
+    )
+
+    assert result.exit_code != 0
+    assert "boom: test" in result.output

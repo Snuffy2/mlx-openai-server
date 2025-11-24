@@ -13,13 +13,20 @@ from pathlib import Path
 import sys
 import time
 from typing import Any, Literal
+from urllib.parse import quote
 
 import click
+import httpx
 from loguru import logger
 
 from .config import MLXServerConfig
 from .handler.parser.factory import PARSER_REGISTRY
 from .hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
+from .hub.server import (
+    is_hub_controller_running,
+    start_hub_controller_process,
+    stop_hub_controller_process,
+)
 from .hub.service import (
     HubServiceClient,
     HubServiceError,
@@ -148,7 +155,7 @@ def _print_hub_status(
         pid = (live or {}).get("pid") or "-"
         log_target = model.log_file or "<hub managed>"
         group = model.group or "<none>"
-        default_flag = "⭐ auto" if model.is_default_model else "on-demand"
+        default_flag = "⭐ auto-start" if model.is_default_model else "manual"
         click.echo(
             f"  - {name:<{name_width}} | state={state} | pid={pid} | "
             f"group={group} | log={log_target} | {default_flag}"
@@ -203,6 +210,112 @@ def _require_service_client(config: MLXHubConfig) -> HubServiceClient:
             "Hub manager is not running. Start it via 'mlx-openai-server hub start'."
         )
     return client
+
+
+def _resolve_controller_base_url(config: MLXHubConfig) -> str:
+    host = (config.host or "127.0.0.1").strip()
+    if host in {"0.0.0.0", "::", "[::]"}:
+        host = "127.0.0.1"
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    port = config.port or 8000
+    return f"http://{host}:{port}"
+
+
+def _perform_memory_action_request(
+    config: MLXHubConfig,
+    model_name: str,
+    action: Literal["load-model", "unload-model"],
+    *,
+    reason: str,
+) -> tuple[bool, str]:
+    base_url = _resolve_controller_base_url(config)
+    url = f"{base_url}/hub/models/{quote(model_name, safe='')}/{action}"
+    try:
+        response = httpx.post(url, json={"reason": reason}, timeout=10.0)
+    except httpx.HTTPError as exc:  # pragma: no cover - network errors
+        return False, f"controller unreachable ({exc})"
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.is_error:
+        message = (
+            payload.get("error", {}).get("message")
+            or payload.get("message")
+            or f"Failed to {action} {model_name}"
+        )
+        return False, message
+    message = payload.get("message") or f"Memory {action} requested"
+    return True, message
+
+
+def _run_memory_actions(
+    config: MLXHubConfig,
+    model_names: Iterable[str],
+    action: Literal["load-model", "unload-model"],
+    *,
+    reason: str,
+) -> None:
+    had_error = False
+    for raw_name in model_names:
+        target = raw_name.strip()
+        if not target:
+            had_error = True
+            _flash("Skipping blank model name entry", tone="warning")
+            continue
+        ok, message = _perform_memory_action_request(config, target, action, reason=reason)
+        if ok:
+            verb = "load" if action == "load" else "unload"
+            _flash(f"{target}: memory {verb} requested ({message})", tone="success")
+        else:
+            had_error = True
+            _flash(f"{target}: {message}", tone="error")
+    if had_error:
+        raise click.ClickException("One or more memory actions failed")
+
+
+def _wait_for_controller_available(config: MLXHubConfig, timeout: float = 20.0) -> bool:
+    base_url = _resolve_controller_base_url(config)
+    deadline = time.time() + timeout
+    last_error: str | None = None
+    while time.time() < deadline:
+        try:
+            response = httpx.get(f"{base_url}/health", timeout=5.0)
+            if response.status_code < 500:
+                return True
+        except httpx.HTTPError as exc:  # pragma: no cover - network timing
+            last_error = str(exc)
+        time.sleep(0.5)
+    if last_error:
+        logger.debug(f"Controller readiness check failed: {last_error}")
+    return False
+
+
+def _start_controller_if_needed(config: MLXHubConfig) -> None:
+    if is_hub_controller_running(config):
+        _flash("Hub controller already running", tone="warning")
+        return
+    if config.source_path is None:
+        raise click.ClickException(
+            "Hub configuration must be saved to disk before starting the controller."
+        )
+    pid = start_hub_controller_process(config.source_path)
+    _flash(f"Launching hub controller (pid={pid})", tone="info")
+    if not _wait_for_controller_available(config):
+        raise click.ClickException(
+            "Hub controller failed to start within 20 seconds. Inspect hub logs for details."
+        )
+    _flash("Hub controller is now running", tone="success")
+
+
+def _stop_controller_if_running(config: MLXHubConfig) -> None:
+    if stop_hub_controller_process(config):
+        _flash("Hub controller shutdown requested", tone="success")
+    else:
+        _flash("Hub controller is not running", tone="warning")
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -535,50 +648,40 @@ def hub(
         ctx.invoke(hub_start)
 
 
-@hub.command(name="start", help="Start the hub manager service in the background")
+@hub.command(name="start", help="Start the hub manager ")
 @click.argument("model_names", nargs=-1)
 @click.pass_context
 def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
-    """Launch the long-lived hub manager process and report status.
-
-    Parameters
-    ----------
-    ctx : click.Context
-        Click context.
-    model_names : tuple[str, ...]
-        Names of models to start.
-    """
+    """Launch the hub manager and print status."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
     client = _build_service_client(config)
     models = model_names or None
 
-    if client.is_available():
+    if not client.is_available():
+        if config.source_path is None:
+            raise click.ClickException(
+                "Hub configuration must be loaded from disk. Provide --config to specify a file."
+            )
+        pid = start_hub_service_process(config.source_path)
+        _flash(f"Launching hub manager (pid={pid})", tone="info")
+        if not client.wait_until_available(timeout=20.0):
+            raise click.ClickException("Hub manager failed to start within 20 seconds")
+        _flash("Hub manager is now running", tone="success")
+    else:
         _flash("Hub manager already running", tone="warning")
-        try:
-            snapshot = client.status()
-        except HubServiceError as exc:
-            _flash(f"Unable to fetch live status: {exc}", tone="warning")
-            snapshot = None
-        _print_hub_status(config, model_names=models, live_status=snapshot)
-        return
 
-    if config.source_path is None:
-        raise click.ClickException(
-            "Hub configuration must be loaded from disk. Provide --config to specify a file."
-        )
+    _start_controller_if_needed(config)
 
-    pid = start_hub_service_process(config.source_path)
-    _flash(f"Launching hub manager (pid={pid})", tone="info")
-    if not client.wait_until_available(timeout=20.0):
-        raise click.ClickException("Hub manager failed to start within 20 seconds")
+    click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
+    if config.enable_status_page:
+        click.echo(f"Browse to http://{config.host}:{config.port}/hub for the status dashboard")
 
-    _flash("Hub manager is now running", tone="success")
+    snapshot = None
     try:
         snapshot = client.status()
     except HubServiceError as exc:
         _flash(f"Unable to fetch live status: {exc}", tone="warning")
-        snapshot = None
     _print_hub_status(config, model_names=models, live_status=snapshot)
 
 
@@ -626,7 +729,7 @@ def hub_reload(ctx: click.Context) -> None:
     _reload_or_fail(client, header="Hub reload complete")
 
 
-@hub.command(name="stop", help="Stop the hub manager service and all models")
+@hub.command(name="stop", help="Stop the hub manager and all models")
 @click.pass_context
 def hub_stop(ctx: click.Context) -> None:
     """Shut down the hub manager and terminate all managed models.
@@ -638,7 +741,13 @@ def hub_stop(ctx: click.Context) -> None:
     """
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
-    client = _require_service_client(config)
+    _stop_controller_if_running(config)
+
+    client = _build_service_client(config)
+    if not client.is_available():
+        _flash("Hub manager is not running", tone="warning")
+        return
+
     _reload_or_fail(client, header="Config synced before shutdown")
     try:
         client.shutdown()
@@ -647,10 +756,10 @@ def hub_stop(ctx: click.Context) -> None:
     _flash("Hub manager shutdown requested", tone="success")
 
 
-@hub.command(name="load", help="Start one or more model processes")
+@hub.command(name="start-model", help="Start one or more model processes")
 @click.argument("model_names", nargs=-1, required=True)
 @click.pass_context
-def hub_load(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+def hub_start_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger process launches for the provided model names.
 
     Parameters
@@ -672,15 +781,15 @@ def hub_load(ctx: click.Context, model_names: tuple[str, ...]) -> None:
         try:
             client.start_model(target)
         except HubServiceError as exc:
-            _flash(f"{target}: load failed ({exc})", tone="error")
+            _flash(f"{target}: start failed ({exc})", tone="error")
         else:
             _flash(f"{target}: start requested", tone="success")
 
 
-@hub.command(name="unload", help="Stop one or more model processes")
+@hub.command(name="stop-model", help="Stop one or more model processes")
 @click.argument("model_names", nargs=-1, required=True)
 @click.pass_context
-def hub_unload(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+def hub_stop_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Stop running processes for the provided model names.
 
     Parameters
@@ -702,9 +811,41 @@ def hub_unload(ctx: click.Context, model_names: tuple[str, ...]) -> None:
         try:
             client.stop_model(target)
         except HubServiceError as exc:
-            _flash(f"{target}: unload failed ({exc})", tone="error")
+            _flash(f"{target}: stop failed ({exc})", tone="error")
         else:
             _flash(f"{target}: stop requested", tone="success")
+
+
+@hub.command(name="load-model", help="Load handlers for one or more models into memory")
+@click.argument("model_names", nargs=-1, required=True)
+@click.option(
+    "--reason",
+    default="cli",
+    show_default=True,
+    help="Reason string recorded alongside the controller action.",
+)
+@click.pass_context
+def hub_memory_load(ctx: click.Context, model_names: tuple[str, ...], reason: str) -> None:
+    """Trigger controller-backed memory loads for the provided models."""
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    _run_memory_actions(config, model_names, "load-model", reason=reason)
+
+
+@hub.command(name="unload-model", help="Unload handlers for one or more models from memory")
+@click.argument("model_names", nargs=-1, required=True)
+@click.option(
+    "--reason",
+    default="cli",
+    show_default=True,
+    help="Reason string recorded alongside the controller action.",
+)
+@click.pass_context
+def hub_memory_unload(ctx: click.Context, model_names: tuple[str, ...], reason: str) -> None:
+    """Trigger controller-backed memory unloads for the provided models."""
+
+    config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    _run_memory_actions(config, model_names, "unload-model", reason=reason)
 
 
 @hub.command(name="watch", help="Continuously print live hub manager status")

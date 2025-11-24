@@ -48,6 +48,7 @@ class MLXServerConfig:
     name: str | None = None
     group: str | None = None
     is_default_model: bool = False
+    enable_status_page: bool = True
 
     # Used to capture raw CLI input before processing
     lora_paths_str: str | None = None

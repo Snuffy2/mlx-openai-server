@@ -50,11 +50,13 @@ from ..utils.errors import create_error_response
 from .hub_routes import (
     get_cached_model_metadata,
     get_configured_model_id,
-    hub_load_model,
+    hub_memory_load_model,
+    hub_memory_unload_model,
     hub_router,
+    hub_start_model,
     hub_status,
     hub_status_page,
-    hub_unload_model,
+    hub_stop_model,
 )
 
 router = APIRouter()
@@ -64,8 +66,10 @@ __all__ = [
     "router",
     "hub_status",
     "hub_status_page",
-    "hub_load_model",
-    "hub_unload_model",
+    "hub_start_model",
+    "hub_stop_model",
+    "hub_memory_load_model",
+    "hub_memory_unload_model",
 ]
 
 

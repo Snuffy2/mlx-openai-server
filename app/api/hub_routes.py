@@ -13,6 +13,8 @@ from loguru import logger
 from pydantic import ValidationError
 
 from ..hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
+from ..hub.errors import HubControllerError
+from ..hub.runtime import HubRuntime
 from ..hub.service import (
     HubServiceClient,
     HubServiceError,
@@ -36,7 +38,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
 <head>
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>MLX Hub Status</title>
+    <title>MLX OpenAI Server Hub Status</title>
     <style>
         :root {
             color-scheme: dark;
@@ -149,6 +151,22 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             gap: 8px;
             flex-wrap: wrap;
         }
+        .action-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 140px;
+        }
+        .action-group__label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            color: #9aa0af;
+            letter-spacing: 0.08em;
+        }
+        .action-group__buttons {
+            display: flex;
+            gap: 6px;
+        }
         .action-btn--secondary {
             background: transparent;
             border-color: rgba(255, 255, 255, 0.25);
@@ -203,7 +221,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
 </head>
 <body>
     <header>
-        <h1>MLX Hub Status</h1>
+        <h1>MLX OpenAI Server Hub Status</h1>
         <p>Live snapshot of registered models, groups, and controller health.</p>
     </header>
 
@@ -218,12 +236,6 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                 <div id=\"status-pill\" class=\"pill pill--warn\">Loading…</div>
             </div>
             <div>
-                <div class="actions">
-                    <button class="refresh-btn" type="button">Refresh</button>
-                    <button class="action-btn" type="button" data-service-action="start">Start</button>
-                    <button class="action-btn action-btn--secondary" type="button" data-service-action="reload">Reload</button>
-                    <button class="action-btn action-btn--secondary" type="button" data-service-action="stop">Stop</button>
-                </div>
                 <div id=\"counts\">—</div>
             </div>
             <div>
@@ -232,7 +244,11 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             </div>
             <div>
                 <div class=\"muted\">Controls</div>
-                <button class=\"refresh-btn\" type=\"button\">Refresh</button>
+                <div class="actions">
+                    <button class="refresh-btn" type="button">Refresh</button>
+                    <button class="action-btn action-btn--secondary" type="button" data-service-action="reload">Reload</button>
+                    <button class="action-btn action-btn--secondary" type="button" data-service-action="stop">Stop</button>
+                </div>
             </div>
         </div>
         <div id=\"warnings\" class=\"warnings\" hidden>
@@ -247,17 +263,18 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             <thead>
                 <tr>
                     <th>Name</th>
-                    <th>Status</th>
+                    <th>Process</th>
+                    <th>Memory</th>
                     <th>Type</th>
                     <th>Group</th>
                     <th>Default</th>
-                    <th>Path</th>
+                    <th>Model</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody id=\"models-body\">
                 <tr>
-                    <td colspan=\"7\" class=\"muted\">Fetching hub snapshot…</td>
+                    <td colspan=\"8\" class=\"muted\">Fetching hub snapshot…</td>
                 </tr>
             </tbody>
         </table>
@@ -270,6 +287,8 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             stop: '/hub/service/stop',
             reload: '/hub/service/reload',
         };
+        const CONTROLLER_WARNING_MESSAGE = 'Hub controller is not running on this server. Memory buttons stay disabled until the hub server is up.';
+        let controllerAvailable = false;
 
         function escapeHtml(value) {
             return String(value ?? '')
@@ -318,35 +337,87 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             list.innerHTML = warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
         }
 
+        function describeProcess(meta) {
+            const state = String(meta.process_state ?? 'inactive').toLowerCase();
+            const pid = meta.pid ? `PID ${meta.pid}` : null;
+            const exitInfo = meta.exit_code && meta.exit_code !== 0 ? `exit ${meta.exit_code}` : null;
+            const detail = state === 'running' ? pid : exitInfo;
+            const pieces = [state.toUpperCase()];
+            if (detail) {
+                pieces.push(detail);
+            }
+            return pieces.join(' • ');
+        }
+
+        function describeMemory(meta) {
+            const state = String(meta.memory_state ?? 'unloaded').toLowerCase();
+            const transition = meta.memory_last_transition_at ? formatTimestamp(meta.memory_last_transition_at) : null;
+            const error = meta.memory_last_error ? `Error: ${escapeHtml(meta.memory_last_error)}` : null;
+            const pieces = [state.toUpperCase()];
+            if (transition) {
+                pieces.push(`@ ${transition}`);
+            }
+            return {
+                label: pieces.join(' • '),
+                error,
+            };
+        }
+
         function renderModels(models) {
             const body = document.getElementById('models-body');
             if (!models || models.length === 0) {
-                body.innerHTML = '<tr><td colspan=\"7\">No models registered.</td></tr>';
+                body.innerHTML = '<tr><td colspan="8">No models registered.</td></tr>';
                 return;
             }
             body.innerHTML = models
                 .map((model) => {
                     const meta = model.metadata ?? {};
-                    const status = meta.status ?? 'unknown';
-                    const normalizedStatus = String(status).toLowerCase();
+                    const processState = String(meta.process_state ?? 'inactive').toLowerCase();
+                    const memoryState = String(meta.memory_state ?? 'unloaded').toLowerCase();
+                    const processRunning = processState === 'running';
                     const group = meta.group ?? '—';
-                    const defaultFlag = meta.default ? 'auto' : 'on-demand';
+                    const defaultFlag = meta.default ? 'auto-start' : 'manual';
                     const modelType = meta.model_type ?? 'n/a';
                     const modelPath = meta.model_path ?? '';
                     const safeId = escapeHtml(model.id);
-                    const loadDisabled = normalizedStatus === 'initialized' || normalizedStatus === 'loading';
-                    const unloadDisabled = normalizedStatus !== 'initialized';
+                    const processLabel = describeProcess(meta);
+                    const memoryDescriptor = describeMemory(meta);
+                    const processStartVisible = !processRunning;
+                    const processStopVisible = processRunning;
+                    const processStartDisabled = ['starting'].includes(processState);
+                    const processStopDisabled = ['stopping'].includes(processState);
+                    const memoryGroupVisible = controllerAvailable && processRunning;
+                    const memoryLoaded = memoryState === 'loaded';
+                    const memoryButtonLabel = memoryLoaded ? 'Unload' : 'Load';
+                    const memoryButtonAction = memoryLoaded ? 'unload-model' : 'load-model';
+                    const memoryButtonDisabled = ['loading', 'unloading'].includes(memoryState);
                     return `<tr>
                         <td>${safeId}</td>
-                        <td>${escapeHtml(status)}</td>
+                        <td>${escapeHtml(processLabel)}</td>
+                        <td>
+                            <div>${escapeHtml(memoryDescriptor.label)}</div>
+                            ${memoryDescriptor.error ? `<div class="muted">${memoryDescriptor.error}</div>` : ''}
+                        </td>
                         <td>${escapeHtml(modelType)}</td>
                         <td>${escapeHtml(group)}</td>
                         <td>${escapeHtml(defaultFlag)}</td>
                         <td>${escapeHtml(modelPath)}</td>
                         <td>
                             <div class=\"actions\">
-                                <button class=\"action-btn\" data-action=\"load\" data-model=\"${safeId}\" ${loadDisabled ? 'disabled' : ''}>Load</button>
-                                <button class=\"action-btn action-btn--secondary\" data-action=\"unload\" data-model=\"${safeId}\" ${unloadDisabled ? 'disabled' : ''}>Unload</button>
+                                <div class=\"action-group\">
+                                    <div class=\"action-group__label\">Process</div>
+                                    <div class=\"action-group__buttons\">
+                                        ${processStartVisible ? `<button class=\"action-btn\" data-scope=\"process\" data-action=\"start-model\" data-model=\"${safeId}\" ${processStartDisabled ? 'disabled' : ''}>Start</button>` : ''}
+                                        ${processStopVisible ? `<button class=\"action-btn action-btn--secondary\" data-scope=\"process\" data-action=\"stop-model\" data-model=\"${safeId}\" ${processStopDisabled ? 'disabled' : ''}>Stop</button>` : ''}
+                                    </div>
+                                </div>
+                                ${memoryGroupVisible ? `
+                                <div class=\"action-group\">
+                                    <div class=\"action-group__label\">Memory</div>
+                                    <div class=\"action-group__buttons\">
+                                        <button class=\"action-btn ${memoryLoaded ? 'action-btn--secondary' : ''}\" data-scope=\"memory\" data-action=\"${memoryButtonAction}\" data-model=\"${safeId}\" ${memoryButtonDisabled ? 'disabled' : ''}>${memoryButtonLabel}</button>
+                                    </div>
+                                </div>` : ''}
                             </div>
                         </td>
                     </tr>`;
@@ -412,6 +483,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             const button = event.currentTarget;
             const model = button.getAttribute('data-model');
             const action = button.getAttribute('data-action');
+            const scope = button.getAttribute('data-scope') ?? 'process';
             if (!model || !action) {
                 return;
             }
@@ -422,20 +494,35 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                 btn.disabled = true;
             });
             const originalLabel = button.textContent;
-            button.textContent = action === 'load' ? 'Loading…' : 'Unloading…';
+            const pendingLabel = {
+                'start-model': 'Starting…',
+                'stop-model': 'Stopping…',
+                'load-model': 'Loading…',
+                'unload-model': 'Unloading…',
+            }[action] ?? 'Working…';
+            button.textContent = pendingLabel;
 
             try {
-                const response = await fetch(`/hub/models/${encodeURIComponent(model)}/${action}`, {
+                const endpoint = `/hub/models/${encodeURIComponent(model)}/${action}`;
+                const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reason: 'dashboard' }),
                 });
                 const payload = await response.json().catch(() => ({}));
                 if (!response.ok) {
-                    const message = payload?.error?.message ?? payload?.message ?? `Failed to ${action} ${model}`;
+                    const friendlyAction = action.replace(/-/g, ' ');
+                    const message = payload?.error?.message ?? payload?.message ?? `Failed to ${friendlyAction} ${model}`;
                     throw new Error(message);
                 }
-                showToast(`${action === 'load' ? 'Load' : 'Unload'} request sent for ${model}`, 'success');
+                const scopeLabel = scope === 'memory' ? 'memory' : 'process';
+                const verb = {
+                    'start-model': 'Start',
+                    'stop-model': 'Stop',
+                    'load-model': 'Load',
+                    'unload-model': 'Unload',
+                }[action] ?? 'Action';
+                showToast(`${verb} ${scopeLabel} request sent for ${model}`, 'success');
             } catch (error) {
                 showToast(error.message ?? 'Action failed', 'error');
             } finally {
@@ -497,11 +584,16 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                     throw new Error(`Request failed with status ${response.status}`);
                 }
                 const data = await response.json();
+                controllerAvailable = Boolean(data.controller_available);
+                const warningList = Array.isArray(data.warnings) ? [...data.warnings] : [];
+                if (!controllerAvailable && !warningList.includes(CONTROLLER_WARNING_MESSAGE)) {
+                    warningList.push(CONTROLLER_WARNING_MESSAGE);
+                }
                 clearError();
                 setStatusPill(data.status ?? 'unknown');
                 document.getElementById('counts').textContent = `${data.counts?.loaded ?? 0} / ${data.counts?.registered ?? 0} loaded`;
                 document.getElementById('updated-at').textContent = formatTimestamp(data.timestamp);
-                renderWarnings(data.warnings ?? []);
+                renderWarnings(warningList);
                 renderModels(data.models ?? []);
             } catch (error) {
                 showError(error.message ?? 'Failed to fetch hub status');
@@ -649,6 +741,34 @@ def _manager_unavailable_response() -> JSONResponse:
     )
 
 
+def _controller_unavailable_response() -> JSONResponse:
+    """Return a standardized response when the hub controller is missing."""
+
+    return JSONResponse(
+        content=create_error_response(
+            "Hub controller is not available. Ensure the hub server is running before issuing memory actions.",
+            "service_unavailable",
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        ),
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+
+
+def _controller_error_response(exc: HubControllerError) -> JSONResponse:
+    """Convert a HubControllerError into a JSON API response."""
+
+    status = exc.status_code or HTTPStatus.SERVICE_UNAVAILABLE
+    error_type = "invalid_request_error"
+    if status == HTTPStatus.TOO_MANY_REQUESTS:
+        error_type = "rate_limit_error"
+    elif status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        error_type = "service_unavailable"
+    return JSONResponse(
+        content=create_error_response(str(exc), error_type, status),
+        status_code=status,
+    )
+
+
 def _ensure_manager_available(client: HubServiceClient) -> bool:
     """Check if the hub manager service is available.
 
@@ -666,6 +786,12 @@ def _ensure_manager_available(client: HubServiceClient) -> bool:
         return client.is_available()
     except HubServiceError:
         return False
+
+
+def _normalize_model_name(model_name: str) -> str:
+    """Sanitize a model target provided via the API."""
+
+    return model_name.strip()
 
 
 def _model_created_timestamp(config: MLXHubConfig) -> int:
@@ -693,6 +819,7 @@ def _model_created_timestamp(config: MLXHubConfig) -> int:
 def _build_models_from_config(
     config: MLXHubConfig,
     live_snapshot: dict[str, Any] | None,
+    runtime: HubRuntime | None = None,
 ) -> tuple[list[Model], HubStatusCounts]:
     """Build model list and status counts from hub config and live snapshot.
 
@@ -702,6 +829,8 @@ def _build_models_from_config(
         The hub configuration.
     live_snapshot : dict[str, Any] or None
         Live status snapshot from the service.
+    runtime : HubRuntime, optional
+        Runtime reference used to enrich metadata with memory lifecycle states.
 
     Returns
     -------
@@ -717,17 +846,31 @@ def _build_models_from_config(
                 if isinstance(name, str):
                     live_entries[name] = entry
 
+    runtime_lookup: dict[str, dict[str, Any]] = {}
+    if runtime is not None:
+        for summary in runtime.describe_models(None):
+            name = summary.get("name")
+            if isinstance(name, str):
+                runtime_lookup[name] = summary
+
     created_ts = _model_created_timestamp(config)
     rendered: list[Model] = []
-    loaded = 0
+    process_running = 0
+    memory_loaded = 0
     for server_cfg in config.models:
         name = server_cfg.name or server_cfg.model_identifier
         live = live_entries.get(name, {})
         state = str(live.get("state") or "inactive").lower()
+        runtime_summary = runtime_lookup.get(name)
+        memory_state = str(runtime_summary.get("status")) if runtime_summary else None
         if state == "running":
-            loaded += 1
+            process_running += 1
+        if memory_state == "loaded":
+            memory_loaded += 1
         metadata = {
-            "status": state,
+            "status": memory_state or state,
+            "process_state": state,
+            "memory_state": memory_state,
             "group": server_cfg.group,
             "default": server_cfg.is_default_model,
             "model_type": server_cfg.model_type,
@@ -738,6 +881,9 @@ def _build_models_from_config(
             "stopped_at": live.get("stopped_at"),
             "exit_code": live.get("exit_code"),
         }
+        if runtime_summary is not None:
+            metadata["memory_last_error"] = runtime_summary.get("last_error")
+            metadata["memory_last_transition_at"] = runtime_summary.get("last_transition_at")
         rendered.append(
             Model(
                 id=name,
@@ -748,7 +894,8 @@ def _build_models_from_config(
             )
         )
 
-    counts = HubStatusCounts(registered=len(rendered), loaded=loaded)
+    loaded_count = memory_loaded if runtime_lookup else process_running
+    counts = HubStatusCounts(registered=len(rendered), loaded=loaded_count)
     return rendered, counts
 
 
@@ -767,6 +914,7 @@ def _build_legacy_hub_status(raw_request: Request) -> HubStatusResponse:
     """
     registry = getattr(raw_request.app.state, "registry", None)
     server_config = getattr(raw_request.app.state, "server_config", None)
+    controller_available = getattr(raw_request.app.state, "hub_controller", None) is not None
     warnings: list[str] = []
     status: Literal["ok", "degraded"] = "ok"
     model_payloads: list[dict[str, Any]] = []
@@ -815,6 +963,7 @@ def _build_legacy_hub_status(raw_request: Request) -> HubStatusResponse:
         models=models_data,
         counts=counts,
         warnings=warnings,
+        controller_available=controller_available,
     )
 
 
@@ -886,12 +1035,15 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
     except HubServiceError as exc:
         warnings.append(f"Hub manager unavailable: {exc}")
 
-    models, counts = _build_models_from_config(config, snapshot)
+    runtime = getattr(raw_request.app.state, "hub_runtime", None)
+    models, counts = _build_models_from_config(config, snapshot, runtime=runtime)
     response_timestamp = int(time.time())
     if snapshot is not None:
         timestamp_value = snapshot.get("timestamp")
         if isinstance(timestamp_value, (int, float)):
             response_timestamp = int(timestamp_value)
+
+    controller_available = getattr(raw_request.app.state, "hub_controller", None) is not None
 
     return HubStatusResponse(
         status="ok" if snapshot is not None else "degraded",
@@ -901,6 +1053,7 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
         models=models,
         counts=counts,
         warnings=warnings,
+        controller_available=controller_available,
     )
 
 
@@ -1042,8 +1195,8 @@ async def hub_service_reload(raw_request: Request) -> HubServiceActionResponse |
     )
 
 
-@hub_router.post("/hub/models/{model_name}/load", response_model=HubModelActionResponse)
-async def hub_load_model(
+@hub_router.post("/hub/models/{model_name}/start-model", response_model=HubModelActionResponse)
+async def hub_start_model(
     model_name: str,
     raw_request: Request,
     payload: HubModelActionRequest | None = None,
@@ -1066,11 +1219,11 @@ async def hub_load_model(
     """
 
     _ = payload  # reserved for future compatibility
-    return _hub_model_service_action(raw_request, model_name, "load")
+    return _hub_model_service_action(raw_request, model_name, "start-model")
 
 
-@hub_router.post("/hub/models/{model_name}/unload", response_model=HubModelActionResponse)
-async def hub_unload_model(
+@hub_router.post("/hub/models/{model_name}/stop-model", response_model=HubModelActionResponse)
+async def hub_stop_model(
     model_name: str,
     raw_request: Request,
     payload: HubModelActionRequest | None = None,
@@ -1093,13 +1246,35 @@ async def hub_unload_model(
     """
 
     _ = payload  # reserved for future compatibility
-    return _hub_model_service_action(raw_request, model_name, "unload")
+    return _hub_model_service_action(raw_request, model_name, "stop-model")
+
+
+@hub_router.post("/hub/models/{model_name}/load-model", response_model=HubModelActionResponse)
+async def hub_memory_load_model(
+    model_name: str,
+    raw_request: Request,
+    payload: HubModelActionRequest | None = None,
+) -> HubModelActionResponse | JSONResponse:
+    """Request that the in-process controller load ``model_name`` into memory."""
+
+    return await _hub_memory_controller_action(raw_request, model_name, "load-model", payload)
+
+
+@hub_router.post("/hub/models/{model_name}/unload-model", response_model=HubModelActionResponse)
+async def hub_memory_unload_model(
+    model_name: str,
+    raw_request: Request,
+    payload: HubModelActionRequest | None = None,
+) -> HubModelActionResponse | JSONResponse:
+    """Request that the in-process controller unload ``model_name`` from memory."""
+
+    return await _hub_memory_controller_action(raw_request, model_name, "unload-model", payload)
 
 
 def _hub_model_service_action(
     raw_request: Request,
     model_name: str,
-    action: Literal["load", "unload"],
+    action: Literal["start-model", "stop-model"],
 ) -> HubModelActionResponse | JSONResponse:
     """Execute a load or unload action on a model via the hub service.
 
@@ -1109,7 +1284,7 @@ def _hub_model_service_action(
         The incoming FastAPI request.
     model_name : str
         Name of the model to act on.
-    action : Literal["load", "unload"]
+    action : Literal["start-model", "stop-model"]
         The action to perform.
 
     Returns
@@ -1117,7 +1292,7 @@ def _hub_model_service_action(
     HubModelActionResponse or JSONResponse
         Action response or error response.
     """
-    target = model_name.strip()
+    target = _normalize_model_name(model_name)
     if not target:
         return JSONResponse(
             content=create_error_response(
@@ -1143,14 +1318,64 @@ def _hub_model_service_action(
         return _service_error_response("reload before executing the model action", exc)
 
     try:
-        if action == "load":
+        if action == "start-model":
             client.start_model(target)
-            message = f"Model '{target}' load requested"
+            message = f"Model '{target}' start requested"
         else:
             client.stop_model(target)
-            message = f"Model '{target}' unload requested"
+            message = f"Model '{target}' stop requested"
     except HubServiceError as exc:
-        return _service_error_response(f"{action} model '{target}'", exc)
+        friendly = action.replace("-", " ")
+        return _service_error_response(f"{friendly} for model '{target}'", exc)
+
+    return HubModelActionResponse(status="ok", action=action, model=target, message=message)
+
+
+async def _hub_memory_controller_action(
+    raw_request: Request,
+    model_name: str,
+    action: Literal["load-model", "unload-model"],
+    payload: HubModelActionRequest | None,
+) -> HubModelActionResponse | JSONResponse:
+    """Execute a memory load/unload request using the in-process controller."""
+
+    target = _normalize_model_name(model_name)
+    if not target:
+        return JSONResponse(
+            content=create_error_response(
+                "Model name cannot be empty",
+                "invalid_request_error",
+                HTTPStatus.BAD_REQUEST,
+            ),
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+
+    controller = getattr(raw_request.app.state, "hub_controller", None)
+    if controller is None:
+        return _controller_unavailable_response()
+
+    reason = payload.reason if payload and payload.reason else "manual"
+    try:
+        if action == "load-model":
+            await controller.load_model(target, reason=reason)
+            message = f"Model '{target}' memory load requested"
+        else:
+            await controller.unload_model(target, reason=reason)
+            message = f"Model '{target}' memory unload requested"
+    except HubControllerError as exc:
+        return _controller_error_response(exc)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception(
+            f"Unexpected failure while executing {action} for {target}. {type(exc).__name__}: {exc}",
+        )
+        return JSONResponse(
+            content=create_error_response(
+                f"Unexpected failure while executing {action.replace('_', ' ')} for '{target}'",
+                "internal_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            ),
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
 
     return HubModelActionResponse(status="ok", action=action, model=target, message=message)
 

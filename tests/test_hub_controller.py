@@ -144,8 +144,8 @@ def _factory(config: MLXServerConfig, on_change: HandlerCallback) -> _FakeHandle
     return _FakeHandlerManager(config, on_change=on_change)
 
 
-def test_controller_bootstrap_loads_defaults(tmp_path: Path) -> None:
-    """Auto-bootstrap should load only models flagged as defaults.
+def test_controller_bootstrap_does_not_load_by_default(tmp_path: Path) -> None:
+    """Controller startup should not auto-load models even if marked default.
 
     Parameters
     ----------
@@ -172,11 +172,11 @@ async def _run_bootstrap_test(tmp_path: Path) -> None:
     await controller.wait_for_registry_idle()
 
     statuses = {entry["name"]: entry["status"] for entry in runtime.describe_models(None)}
-    assert statuses["alpha"] == "loaded"
+    assert statuses["alpha"] == "unloaded"
     assert statuses["beta"] == "unloaded"
 
     registry_data = {model["id"]: model for model in registry.list_models()}
-    assert registry_data["alpha"]["metadata"]["status"] == "loaded"
+    assert registry_data["alpha"]["metadata"]["status"] == "unloaded"
 
     await controller.shutdown()
 
@@ -206,6 +206,8 @@ async def _run_group_limit_test(tmp_path: Path) -> None:
     controller = HubController(runtime, registry, handler_factory=_factory)
 
     await controller.start()
+    await controller.wait_for_registry_idle()
+    await controller.load_model("alpha")
     await controller.wait_for_registry_idle()
 
     statuses = {entry["name"]: entry["status"] for entry in runtime.describe_models(None)}

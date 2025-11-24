@@ -746,10 +746,10 @@ Hub mode orchestrates multiple MLX models behind a single OpenAI-compatible port
 
 #### Hub manager service architecture
 
-- `mlx-openai-server hub start` launches a **HubManager** process that reads `hub.yaml`, spawns per-model worker processes, and listens on a UNIX domain socket for control commands.
+- `mlx-openai-server hub start` launches a **HubManager** process that reads `hub.yaml`, spawns per-model worker processes, listens on a UNIX domain socket for control commands, and ensures the local FastAPI controller is running so `/hub`, `/hub/status`, and the OpenAI-compatible API come online automatically.
 - Every CLI call and FastAPI `/hub` endpoint goes through the same `HubServiceClient`, so actions issued from the dashboard, CLI, or API all converge on the background service.
 - `hub start` (and the FastAPI `/hub/status` endpoint) reload `hub.yaml` before reporting status to guarantee that counts/default flags match the current file on disk.
-- Commands such as `hub load MODEL` and `POST /hub/models/{model}/load` return OpenAI-style 429 responses when group caps are saturated; other failures propagate the underlying status code from the manager.
+- Commands such as `hub start-model MODEL` and `POST /hub/models/{model}/start-model` return OpenAI-style 429 responses when group caps are saturated; other failures propagate the underlying status code from the manager.
 - Logs live under the configured `log_path`: the service writes `hub-manager.log`, each model writes `<log_path>/<name>.log`, and PID/socket files are colocated for simple cleanup.
 
 #### Hub configuration file
@@ -774,7 +774,7 @@ Each entry under `models` accepts every `MLXServerConfig` option plus hub-specif
 
 - `name` (required, slug-compliant) – Friendly identifier referenced by clients. The hub validates the slug format (letters in any case, numbers, `-` or `_`) but does not modify the provided value.
 - `model_path` (required) – Local path or Hugging Face repo ID.
-- `default` (optional, bool) – Models with `true` load automatically when the hub starts. When attached to a group, the number of default models cannot exceed that group's `max_loaded` value.
+- `default` (optional, bool) – Models with `true` start their background process automatically when the hub starts. When attached to a group, the number of default models cannot exceed that group's `max_loaded` value.
 - `group` (optional, slug) – Associates the model with a group defined under `groups`.
 - `log_file` / `no_log_file` – Override hub-level logging rules if needed.
 - Any existing CLI flag (e.g., `model_type`, `jit_enabled`, `auto_unload_minutes`, `tool_call_parser`, ...).
@@ -846,11 +846,12 @@ groups:
 
 The `hub` subcommand centralizes every multi-model workflow:
 
-- `hub start` launches (or attaches to) the background HubManager process using the default `~/mlx-openai-server/hub.yaml`. Running `hub start` while the service is already up prints a warning and shows live status instead of spawning another process.
+- `hub start` launches (or attaches to) the background HubManager process using the default `~/mlx-openai-server/hub.yaml` and ensures the FastAPI controller is running on the configured host/port. Re-running the command while the service is already up prints a warning and shows live status instead of spawning another process.
 - `hub status [MODEL ...]` reloads `hub.yaml`, fetches the live snapshot when the service is reachable, and prints per-model summaries. Add `--config PATH` to inspect alternate files without modifying the running service.
 - `hub reload` calls the service to reconcile `hub.yaml` changes and prints started/stopped/unchanged counts using the CLI flash helper.
 - `hub stop` reloads once more (to ensure diffs are flushed) and then requests a graceful shutdown; CLI flash output confirms the outcome.
-- `hub load MODEL [...]` and `hub unload MODEL [...]` call the running service to start/stop specific models, respecting group capacity rules and surfacing 429s if a group is saturated.
+- `hub start-model MODEL [...]` and `hub stop-model MODEL [...]` call the running service to start/stop specific models, respecting group capacity rules and surfacing 429s if a group is saturated.
+- `hub load-model MODEL [...]` and `hub unload-model MODEL [...]` talk directly to the controller to load/unload handlers in memory, which requires the controller to be running on the same host.
 - `hub watch [--interval 5]` keeps streaming `/hub/status` snapshots with uptime columns, exit codes, and log file hints until you press Ctrl+C.
 - `GET /hub` serves the HTML dashboard described below (guarded by `enable_status_page: true`).
 
@@ -861,17 +862,23 @@ mlx-openai-server hub status
 # Provide a custom hub.yaml
 mlx-openai-server hub --config ~/work/mlx/hub.yaml status
 
-# Launch the hub server
+# Launch the hub stack (manager + controller)
 mlx-openai-server hub start
 
-# Launch with a custom hub.yaml
+# Launch with a custom hub.yaml (manager + controller)
 mlx-openai-server hub --config ~/mlx-openai-server/hub.yaml start
 
-# Load models on demand (run while the hub server is up)
-mlx-openai-server hub --config ~/mlx-openai-server/hub.yaml load alpha beta
+# Start specific models on demand (run while the hub server is up)
+mlx-openai-server hub --config ~/mlx-openai-server/hub.yaml start-model alpha beta
 
-# Unload a model using hub.yaml routing
-mlx-openai-server hub unload beta
+# Stop a model using hub.yaml routing
+mlx-openai-server hub stop-model beta
+
+# Load handlers into memory via the controller
+mlx-openai-server hub load-model alpha --reason dashboard
+
+# Unload handlers from memory when they are no longer needed
+mlx-openai-server hub unload-model beta
 
 # Watch live status with automatic refreshes
 mlx-openai-server hub watch --interval 2
@@ -924,7 +931,7 @@ When the central registry is unavailable (for example, while running the legacy 
 
 #### Hub HTML status page
 
-When `enable_status_page` is set to `true` (the default), visiting `/hub` in a browser renders a compact dashboard that polls `/hub/status` every few seconds. It highlights controller health, loaded versus registered counts, warnings, and a sortable table of every configured model. Each row includes **Load** and **Unload** buttons that call the `/hub/models/{model}/load|unload` endpoints. The top of the page also exposes **Start**, **Reload**, and **Stop** buttons for the service itself; all actions surface flash-style notices inline plus toast popups so operators immediately know whether a request succeeded, degraded, or hit a 429. Buttons automatically disable themselves while an action is pending or when the model/service state makes the action invalid. Set `enable_status_page: false` inside `hub.yaml` to disable the route entirely (the server responds with HTTP 404 when disabled).
+When `enable_status_page` is set to `true` (the default), visiting `/hub` in a browser renders a compact dashboard that polls `/hub/status` every few seconds. It highlights controller health, loaded versus registered counts, warnings, and a sortable table of every configured model. Each row includes **Start**/**Stop** buttons wired to `/hub/models/{model}/start-model|stop-model` plus conditional **Load**/**Unload** buttons that reach `/hub/models/{model}/load-model|unload-model` once the controller is available. The top of the page also exposes **Start**, **Reload**, and **Stop** buttons for the service itself; all actions surface flash-style notices inline plus toast popups so operators immediately know whether a request succeeded, degraded, or hit a 429. Buttons automatically disable themselves while an action is pending or when the model/service state makes the action invalid. Set `enable_status_page: false` inside `hub.yaml` to disable the route entirely (the server responds with HTTP 404 when disabled).
 
 #### Hub service control endpoints
 
@@ -934,8 +941,10 @@ FastAPI exposes the same building blocks as the CLI for automation or remote too
 - `POST /hub/service/start` – Spawns the HubManager if it is not running, waits for availability, and returns the PID plus the latest snapshot. Returns HTTP 400 when `hub.yaml` cannot be found or parsed.
 - `POST /hub/service/reload` – Forces the background service to reload `hub.yaml` and returns the diff (`started/stopped/unchanged`).
 - `POST /hub/service/stop` – Raises HTTP 503 with a clear error when no manager is running; otherwise reloads one last time and requests shutdown.
-- `POST /hub/models/{model}/load` – Ensures the service is available, reloads, and calls `start_model`. Returns HTTP 429 when group capacity is exhausted, mirroring OpenAI rate-limit errors.
-- `POST /hub/models/{model}/unload` – Ensures the service is available, reloads, and calls `stop_model`. All responses share the OpenAI-style `error` envelope used by the main API so tooling can reuse existing handlers.
+- `POST /hub/models/{model}/start-model` – Ensures the service is available, reloads, and calls `start_model`. Returns HTTP 429 when group capacity is exhausted, mirroring OpenAI rate-limit errors.
+- `POST /hub/models/{model}/stop-model` – Ensures the service is available, reloads, and calls `stop_model`. All responses share the OpenAI-style `error` envelope used by the main API so tooling can reuse existing handlers.
+- `POST /hub/models/{model}/load-model` – Sends the request to the in-process controller so it can instantiate the handler locally (requires the controller to be running on the same host).
+- `POST /hub/models/{model}/unload-model` – Tells the controller to tear down the in-memory handler while keeping the worker process online for future loads.
 
 Example `curl` usage:
 
@@ -943,8 +952,12 @@ Example `curl` usage:
 # Reload the running hub manager
 curl -X POST http://localhost:8000/hub/service/reload | jq
 
-# Load a model on demand and capture flash message text
-curl -X POST http://localhost:8000/hub/models/alpha/load | jq '.message'
+# Start a model on demand and capture flash message text
+curl -X POST http://localhost:8000/hub/models/alpha/start-model | jq '.message'
+
+# Load handlers into memory through the controller
+curl -X POST http://localhost:8000/hub/models/alpha/load-model -H 'Content-Type: application/json' \
+  -d '{"reason": "dashboard"}' | jq '.message'
 
 # Stop the hub manager service
 curl -X POST http://localhost:8000/hub/service/stop

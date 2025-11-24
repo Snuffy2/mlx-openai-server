@@ -33,7 +33,13 @@ def _write_hub_config(
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
 
-def _model_entry(name: str, *, port: int, group: str | None = None) -> dict[str, object]:
+def _model_entry(
+    name: str,
+    *,
+    port: int,
+    group: str | None = None,
+    default: bool = False,
+) -> dict[str, object]:
     """Return a minimal YAML entry for ``name``."""
 
     data: dict[str, object] = {
@@ -43,6 +49,8 @@ def _model_entry(name: str, *, port: int, group: str | None = None) -> dict[str,
     }
     if group:
         data["group"] = group
+    if default:
+        data["default"] = True
     return data
 
 
@@ -136,8 +144,8 @@ def test_hub_manager_reload_applies_model_diffs(tmp_path: Path) -> None:
         config_path,
         log_path=log_path,
         models=[
-            _model_entry("alpha", port=8100),
-            _model_entry("beta", port=8101),
+            _model_entry("alpha", port=8100, default=True),
+            _model_entry("beta", port=8101, default=True),
         ],
     )
 
@@ -152,7 +160,7 @@ def test_hub_manager_reload_applies_model_diffs(tmp_path: Path) -> None:
     _write_hub_config(
         config_path,
         log_path=log_path,
-        models=[_model_entry("alpha", port=8200)],
+        models=[_model_entry("alpha", port=8200, default=True)],
     )
 
     result = manager.reload()
@@ -163,6 +171,33 @@ def test_hub_manager_reload_applies_model_diffs(tmp_path: Path) -> None:
     assert [status.name for status in statuses] == ["alpha"]
     assert statuses[0].state == "running"
     assert factory.instances["beta"][0].stopped is True
+
+
+def test_hub_manager_leaves_on_demand_models_idle(tmp_path: Path) -> None:
+    """Models without the default flag should remain stopped after reload."""
+
+    config_path = tmp_path / "hub.yaml"
+    log_path = tmp_path / "logs"
+    factory = _StubProcessFactory()
+    manager = HubManager(config_path, process_factory=factory)
+
+    _write_hub_config(
+        config_path,
+        log_path=log_path,
+        models=[_model_entry("gamma", port=8700, default=False)],
+    )
+
+    result = manager.reload()
+    assert result.started == []
+    assert result.stopped == []
+    assert result.unchanged == ["gamma"]
+    assert manager.get_status() == []
+
+    manager.start_model("gamma")
+    statuses = manager.get_status()
+    assert len(statuses) == 1
+    assert statuses[0].name == "gamma"
+    assert statuses[0].state == "running"
 
 
 def test_hub_manager_reload_restarts_crashed_process(tmp_path: Path) -> None:
@@ -176,7 +211,7 @@ def test_hub_manager_reload_restarts_crashed_process(tmp_path: Path) -> None:
     _write_hub_config(
         config_path,
         log_path=log_path,
-        models=[_model_entry("alpha", port=8300)],
+        models=[_model_entry("alpha", port=8300, default=True)],
     )
     manager.reload()
 
@@ -203,7 +238,7 @@ def test_hub_manager_releases_group_slot_after_crash(tmp_path: Path) -> None:
     _write_hub_config(
         config_path,
         log_path=log_path,
-        models=[_model_entry("alpha", port=8400, group="tier")],
+        models=[_model_entry("alpha", port=8400, group="tier", default=True)],
         groups=[{"name": "tier", "max_loaded": 1}],
     )
     manager.reload()
@@ -216,7 +251,7 @@ def test_hub_manager_releases_group_slot_after_crash(tmp_path: Path) -> None:
     _write_hub_config(
         config_path,
         log_path=log_path,
-        models=[_model_entry("beta", port=8500, group="tier")],
+        models=[_model_entry("beta", port=8500, group="tier", default=True)],
         groups=[{"name": "tier", "max_loaded": 1}],
     )
 
@@ -226,7 +261,7 @@ def test_hub_manager_releases_group_slot_after_crash(tmp_path: Path) -> None:
 
 
 def test_hub_manager_enforces_group_limit(tmp_path: Path) -> None:
-    """Reload should fail when a group exceeds its max_loaded cap."""
+    """Manual starts should fail when a group exceeds its max_loaded cap."""
 
     config_path = tmp_path / "hub.yaml"
     log_path = tmp_path / "logs"
@@ -237,14 +272,15 @@ def test_hub_manager_enforces_group_limit(tmp_path: Path) -> None:
         config_path,
         log_path=log_path,
         models=[
-            _model_entry("alpha", port=8600, group="tier"),
-            _model_entry("beta", port=8601, group="tier"),
+            _model_entry("alpha", port=8600, group="tier", default=True),
+            _model_entry("beta", port=8601, group="tier", default=False),
         ],
         groups=[{"name": "tier", "max_loaded": 1}],
     )
 
+    manager.reload()
     with pytest.raises(HubControllerError, match="no available capacity"):
-        manager.reload()
+        manager.start_model("beta")
 
 
 def test_hub_manager_emits_observability_events(tmp_path: Path) -> None:
@@ -264,8 +300,8 @@ def test_hub_manager_emits_observability_events(tmp_path: Path) -> None:
         config_path,
         log_path=log_path,
         models=[
-            _model_entry("alpha", port=8610),
-            _model_entry("beta", port=8611),
+            _model_entry("alpha", port=8610, default=True),
+            _model_entry("beta", port=8611, default=True),
         ],
     )
     manager.reload()
@@ -295,7 +331,7 @@ def test_hub_manager_assigns_per_model_log_files(tmp_path: Path) -> None:
     _write_hub_config(
         config_path,
         log_path=log_path,
-        models=[_model_entry("alpha", port=8620)],
+        models=[_model_entry("alpha", port=8620, default=True)],
     )
 
     manager.reload()

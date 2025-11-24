@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from contextlib import suppress
 from dataclasses import asdict, dataclass
-from multiprocessing import get_context
 from multiprocessing.connection import Client, Connection, Listener
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -95,7 +95,7 @@ class HubService:
         self._install_signal_handlers()
         self._prepare_filesystem()
 
-        logger.info("Starting hub manager service with %d configured model(s)", len(config.models))
+        logger.info(f"Starting hub manager service with {len(config.models)} configured model(s)")
 
         self._manager.reload()
 
@@ -125,11 +125,11 @@ class HubService:
         """Install signal handlers for graceful shutdown and reload."""
 
         def _stop_handler(signum: int, _frame: FrameType | None) -> None:
-            logger.info("Received signal %s; shutting down hub manager", signum)
+            logger.info(f"Received signal {signum}; shutting down hub manager")
             self._request_stop()
 
         def _reload_handler(signum: int, _frame: FrameType | None) -> None:
-            logger.info("Received signal %s; reloading hub configuration", signum)
+            logger.info(f"Received signal {signum}; reloading hub configuration")
             try:
                 self._manager.reload()
             except Exception as exc:  # pragma: no cover - defensive path
@@ -259,11 +259,6 @@ class HubService:
 
 def _configure_service_logging(log_path: Path, log_level: str) -> None:
     logger.remove()
-    logger.add(
-        sys.stdout,
-        level=log_level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | ✦ <level>{message}</level>",
-    )
     logger.add(
         log_path,
         rotation="25 MB",
@@ -503,20 +498,18 @@ def start_hub_service_process(config_path: Path | str) -> int:
         The process ID of the spawned service.
     """
 
-    ctx = get_context("spawn")
-    proc = ctx.Process(target=_service_process_entrypoint, args=(str(config_path),), daemon=False)
-    try:
-        proc.start()
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to start hub service process for config {config_path}: {exc}"
-        ) from exc
-
-    if not proc.pid:
-        raise RuntimeError(
-            f"Hub service process failed to start for config {config_path}: no PID assigned"
-        )
-
+    # Use subprocess.Popen with detached process group for proper background execution
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            f"from app.hub.service import _service_process_entrypoint; _service_process_entrypoint('{config_path}')",
+        ],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=Path.cwd(),
+    )
     return proc.pid
 
 

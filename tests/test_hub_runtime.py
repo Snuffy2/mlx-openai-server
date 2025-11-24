@@ -83,7 +83,7 @@ def test_hub_runtime_bootstrap_and_selection(tmp_path: Path) -> None:
 
     runtime = HubRuntime(config)
 
-    assert runtime.bootstrap_targets() == ["foo"]
+    assert runtime.bootstrap_targets() == []
 
     summaries = runtime.describe_models(["bar"])
     assert len(summaries) == 1
@@ -107,7 +107,7 @@ def test_hub_runtime_enforces_group_slots(tmp_path: Path) -> None:
     )
 
     runtime = HubRuntime(config)
-    assert runtime.bootstrap_targets() == ["alpha", "beta"]
+    assert runtime.bootstrap_targets() == []
 
     assert runtime.can_load("alpha") is True
     runtime.mark_loading("alpha")

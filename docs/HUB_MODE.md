@@ -31,7 +31,7 @@ models:
   - name: alpha                 # required slug (letters, numbers, -, _)
     model_path: /models/alpha   # required
     model_type: lm              # any MLXServerConfig option works
-    default: true               # optional, auto-load at startup
+   default: true               # optional, auto-start the worker process at startup
     group: tier_one             # optional slug reference
 
   - name: beta
@@ -47,7 +47,7 @@ groups:
 Validation highlights:
 
 - Model and group names must already be slug-compliant; invalid values raise `HubConfigError`.
-- Default models inside a group cannot exceed `max_loaded`.
+- Default models inside a group cannot exceed `max_loaded`, since each default immediately starts a worker process when the hub launches.
 - `log_path` is expanded and created automatically, ensuring log files and socket/PID artifacts share the same directory tree.
 - Referencing a group without defining it is permitted when you plan to add the group later; set `groups` explicitly to enforce caps.
 
@@ -55,12 +55,14 @@ Validation highlights:
 
 | Command | Description |
 | --- | --- |
-| `hub start` | Launches the HubManager service (or prints current status if already up). Shows flash messages such as `[ok] Hub manager is now running`. |
+| `hub start` | Launches the HubManager service (or prints current status if already up) and ensures the FastAPI controller is running so `/hub`, `/hub/status`, and OpenAI endpoints stay online. Shows flash messages such as `[ok] Hub manager is now running`. |
 | `hub status [MODEL ...]` | Reloads `hub.yaml`, syncs with the service, and prints per-model summaries. |
 | `hub reload` | Forces the service to reload YAML and emits a flash summary of started/stopped/unchanged models. |
 | `hub stop` | Reloads one last time, requests shutdown, and confirms via flash message. |
-| `hub load MODEL [...]` | Reloads then calls `start_model` for each name; surfaces OpenAI-style 429 errors when groups are saturated. |
-| `hub unload MODEL [...]` | Reloads then calls `stop_model` for each name. |
+| `hub start-model MODEL [...]` | Reloads then calls `start_model` for each name; surfaces OpenAI-style 429 errors when groups are saturated. |
+| `hub stop-model MODEL [...]` | Reloads then calls `stop_model` for each name. |
+| `hub load-model MODEL [...]` | Talks to the controller to instantiate handlers in memory for running workers. |
+| `hub unload-model MODEL [...]` | Tells the controller to dispose of in-memory handlers while leaving the worker alive. |
 | `hub watch [--interval N]` | Streams `/hub/status` snapshots with uptime, exit codes, and log filenames. |
 
 Flash helper tones (`info`, `success`, `warning`, `error`) mirror the HTML dashboard styles so operators see consistent feedback across surfaces.
@@ -69,7 +71,7 @@ Flash helper tones (`info`, `success`, `warning`, `error`) mirror the HTML dashb
 
 - Polls `/hub/status` every five seconds by default and renders the same data used by the CLI.
 - Service controls (Start/Reload/Stop) sit beside the status pill and counts area.
-- Each model row exposes **Load**/**Unload** buttons that disable themselves based on live status to prevent conflicting actions.
+- Each model row exposes a **Process** control cluster (Start/Stop) plus a **Memory** cluster (Load/Unload) that only appears after the worker is running; buttons disable themselves based on live status to prevent conflicting actions.
 - Flash banners appear below the header to highlight the last action, while toast notifications appear in the lower-right corner for transient success/failure updates.
 - When the HubManager is offline, the dashboard degrades gracefully, shows warnings, and continues to surface cached metadata if available.
 
@@ -82,8 +84,10 @@ Flash helper tones (`info`, `success`, `warning`, `error`) mirror the HTML dashb
 | `/hub/service/start` | POST | Starts the HubManager if it is not running. Returns PID details or HTTP 400 if the config is missing. |
 | `/hub/service/reload` | POST | Runs `reload()` inside the service and returns the diff (`started/stopped/unchanged`). |
 | `/hub/service/stop` | POST | Requests shutdown, returning HTTP 503 if no manager is running. |
-| `/hub/models/{model}/load` | POST | Reloads, then issues `start_model`. HTTP 429 indicates group capacity exhaustion. |
-| `/hub/models/{model}/unload` | POST | Reloads, then issues `stop_model`. |
+| `/hub/models/{model}/start-model` | POST | Reloads, then issues `start_model`. HTTP 429 indicates group capacity exhaustion. |
+| `/hub/models/{model}/stop-model` | POST | Reloads, then issues `stop_model`. |
+| `/hub/models/{model}/load-model` | POST | Passes the request to the controller so it can instantiate the handler locally. |
+| `/hub/models/{model}/unload-model` | POST | Requests the controller tear down the in-memory handler and free resources. |
 
 All responses use the same OpenAI-style `error` envelope (`type`, `message`, `code`) so upstream tooling can reuse existing error handling paths.
 
