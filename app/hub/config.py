@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
+import socket
 from typing import Any
 
 from loguru import logger
@@ -16,6 +18,9 @@ HUB_CONFIG_FILENAME = "hub.yaml"
 HUB_HOME = Path("~/mlx-openai-server").expanduser()
 DEFAULT_HUB_CONFIG_PATH = HUB_HOME / HUB_CONFIG_FILENAME
 DEFAULT_HUB_LOG_PATH = HUB_HOME / "logs"
+DEFAULT_MODEL_STARTING_PORT = 47850
+PORT_MIN = 1024
+PORT_MAX = 65535
 
 
 class HubConfigError(RuntimeError):
@@ -58,6 +63,7 @@ class MLXHubConfig:
 
     host: str = "0.0.0.0"
     port: int = 8000
+    model_starting_port: int = DEFAULT_MODEL_STARTING_PORT
     log_level: str = "INFO"
     log_path: Path = field(default_factory=lambda: DEFAULT_HUB_LOG_PATH)
     enable_status_page: bool = True
@@ -152,48 +158,6 @@ def _build_groups(raw_groups: list[dict[str, Any]] | None) -> list[MLXHubGroupCo
     return groups
 
 
-def _validate_group_defaults(
-    models: list[MLXServerConfig], group_lookup: dict[str, MLXHubGroupConfig]
-) -> None:
-    """Ensure grouped default models do not exceed their caps.
-
-    Parameters
-    ----------
-    models : list[MLXServerConfig]
-        List of model configurations.
-    group_lookup : dict[str, MLXHubGroupConfig]
-        Lookup of group configurations.
-
-    Raises
-    ------
-    HubConfigError
-        If validation fails.
-    """
-
-    if not group_lookup:
-        return
-
-    default_counts: dict[str, int] = {}
-    for name in group_lookup:
-        default_counts[name] = 0
-    for model in models:
-        if not model.group:
-            continue
-        if model.group not in group_lookup:
-            raise HubConfigError(f"Model '{model.name}' references undefined group '{model.group}'")
-        if model.is_default_model:
-            default_counts[model.group] += 1
-
-    for group_name, count in default_counts.items():
-        group_cfg = group_lookup[group_name]
-        if group_cfg.max_loaded is None:
-            continue
-        if count > group_cfg.max_loaded:
-            raise HubConfigError(
-                f"Group '{group_name}' has {count} default model(s) but max_loaded is {group_cfg.max_loaded}"
-            )
-
-
 def _resolve_model_log_file(server_config: MLXServerConfig, hub_log_path: Path) -> MLXServerConfig:
     """Resolve the log file path for a model configuration.
 
@@ -233,9 +197,11 @@ def _build_models(
     raw_models: list[dict[str, Any]] | None,
     base_host: str,
     base_port: int,
+    starting_port: int,
     base_log_level: str,
     hub_log_path: Path,
     group_lookup: dict[str, MLXHubGroupConfig],
+    persisted_ports: dict[str, int] | None = None,
 ) -> list[MLXServerConfig]:
     """Build model configurations from raw data.
 
@@ -253,6 +219,10 @@ def _build_models(
         Hub log directory path.
     group_lookup : dict[str, MLXHubGroupConfig]
         Lookup of group configurations.
+    persisted_ports : dict[str, int] | None, optional
+        Mapping of model names to previously assigned ports. When provided, models
+        without an explicit ``port`` reuse their prior assignment even if the
+        socket currently appears busy.
 
     Returns
     -------
@@ -270,6 +240,10 @@ def _build_models(
 
     models: list[MLXServerConfig] = []
     seen_names: set[str] = set()
+    reserved_ports: set[int] = {base_port}
+    next_auto_port = max(starting_port, PORT_MIN)
+
+    persisted_ports = persisted_ports or {}
 
     for idx, raw_model in enumerate(raw_models, start=1):
         if not isinstance(raw_model, dict):
@@ -292,10 +266,41 @@ def _build_models(
         default_flag = bool(model_payload.pop("default", False))
 
         model_payload["host"] = model_payload.get("host", base_host)
-        model_payload["port"] = model_payload.get("port", base_port)
         model_payload["log_level"] = model_payload.get("log_level", base_log_level)
         model_payload["name"] = name
         model_payload["group"] = group_slug
+
+        port_value = model_payload.get("port")
+        host_value = str(model_payload["host"])
+        persisted_port = persisted_ports.get(name)
+        if port_value is None:
+            if persisted_port is not None:
+                candidate_port = _coerce_port_value(name, persisted_port)
+                if candidate_port in reserved_ports:
+                    raise HubConfigError(
+                        f"Persisted port {candidate_port} for model '{name}' conflicts with another entry",
+                    )
+                model_payload["port"] = candidate_port
+            else:
+                candidate_port, next_auto_port = _allocate_port(
+                    name,
+                    host_value,
+                    next_auto_port,
+                    reserved_ports,
+                )
+                model_payload["port"] = candidate_port
+        else:
+            candidate_port = _coerce_port_value(name, port_value)
+            if candidate_port in reserved_ports:
+                raise HubConfigError(
+                    f"Model '{name}' port {candidate_port} conflicts with another model or the controller",
+                )
+            if not _is_port_available(host_value, candidate_port):
+                raise HubConfigError(
+                    f"Model '{name}' port {candidate_port} is already in use on host '{host_value}'",
+                )
+            model_payload["port"] = candidate_port
+        reserved_ports.add(candidate_port)
 
         server_config = MLXServerConfig(**model_payload)
         server_config.is_default_model = default_flag
@@ -310,13 +315,20 @@ def _build_models(
     return models
 
 
-def load_hub_config(config_path: Path | str | None = None) -> MLXHubConfig:
+def load_hub_config(
+    config_path: Path | str | None = None,
+    *,
+    persisted_ports: dict[str, int] | None = None,
+) -> MLXHubConfig:
     """Load and validate a hub configuration file.
 
     Parameters
     ----------
     config_path : Path, str, or None, optional
         Path to the hub configuration file. If None, uses default path.
+    persisted_ports : dict[str, int] | None, optional
+        Mapping of model names to previously assigned ports. Useful when reloading
+        while hub-managed workers are still bound to their sockets.
 
     Returns
     -------
@@ -337,9 +349,20 @@ def load_hub_config(config_path: Path | str | None = None) -> MLXHubConfig:
     except (TypeError, ValueError) as exc:
         raise HubConfigError("Hub port must be an integer") from exc
 
+    model_starting_port_value = data.get("model_starting_port", DEFAULT_MODEL_STARTING_PORT)
+    try:
+        model_starting_port = int(model_starting_port_value)
+    except (TypeError, ValueError) as exc:
+        raise HubConfigError("model_starting_port must be an integer") from exc
+    if not (PORT_MIN <= model_starting_port <= PORT_MAX):
+        raise HubConfigError(
+            f"model_starting_port must be between {PORT_MIN} and {PORT_MAX}",
+        )
+
     hub = MLXHubConfig(
         host=str(data.get("host", "0.0.0.0")),
         port=port,
+        model_starting_port=model_starting_port,
         log_level=str(data.get("log_level", "INFO")),
         log_path=Path(str(data.get("log_path", DEFAULT_HUB_LOG_PATH))),
         enable_status_page=data.get("enable_status_page", True),
@@ -352,18 +375,84 @@ def load_hub_config(config_path: Path | str | None = None) -> MLXHubConfig:
         raw_models=data.get("models"),
         base_host=hub.host,
         base_port=hub.port,
+        starting_port=hub.model_starting_port,
         base_log_level=hub.log_level,
         hub_log_path=hub.log_path,
         group_lookup=group_lookup,
+        persisted_ports=persisted_ports,
     )
 
     # Ensure all models inherit the hub's status page setting
     for model in hub.models:
         model.enable_status_page = hub.enable_status_page
 
-    _validate_group_defaults(hub.models, group_lookup)
-
     logger.info(
         f"Loaded hub config from {path} with {len(hub.models)} model(s) and {len(hub.groups)} group(s)"
     )
     return hub
+
+
+def _coerce_port_value(name: str, port_value: Any) -> int:
+    try:
+        candidate_port = int(port_value)
+    except (TypeError, ValueError) as exc:
+        raise HubConfigError(f"Model '{name}' port must be an integer") from exc
+    if not (PORT_MIN <= candidate_port <= PORT_MAX):
+        raise HubConfigError(
+            f"Model '{name}' port must be between {PORT_MIN} and {PORT_MAX}",
+        )
+    return candidate_port
+
+
+def _allocate_port(
+    name: str,
+    host: str,
+    starting_port: int,
+    reserved_ports: set[int],
+) -> tuple[int, int]:
+    port = max(starting_port, PORT_MIN)
+    while port <= PORT_MAX:
+        if port not in reserved_ports and _is_port_available(host, port):
+            return port, port + 1
+        port += 1
+    raise HubConfigError(
+        f"Unable to find an available port for model '{name}' starting at {starting_port}",
+    )
+
+
+def _is_port_available(host: str, port: int) -> bool:
+    family = socket.AF_INET6 if _is_ipv6_host(host) else socket.AF_INET
+    bind_host = _normalize_host_for_binding(host, family)
+    sock: socket.socket | None = None
+    try:
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        bind_address = (bind_host, port, 0, 0) if family == socket.AF_INET6 else (bind_host, port)
+        sock.bind(bind_address)
+    except OSError:
+        return False
+    finally:
+        if sock is not None:
+            with suppress(Exception):
+                sock.close()
+    return True
+
+
+def _is_ipv6_host(host: str) -> bool:
+    value = host.strip()
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    return ":" in value and not value.count(".")
+
+
+def _normalize_host_for_binding(host: str, family: int) -> str:
+    value = host.strip()
+    if not value:
+        return "::" if family == socket.AF_INET6 else "0.0.0.0"
+    if family == socket.AF_INET6 and value.startswith("[") and value.endswith("]"):
+        return value[1:-1]
+    if family == socket.AF_INET6:
+        return value
+    if value == "::":
+        return "0.0.0.0"
+    return value

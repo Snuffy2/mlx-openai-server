@@ -432,6 +432,12 @@ class HubStatusCounts(OpenAIBaseModel):
     """Aggregate counters for hub/registry state."""
 
     registered: int = Field(0, description="Number of models known to the hub registry.")
+    started: int = Field(
+        0,
+        description=(
+            "Number of models with an active worker process as reported by the hub manager."
+        ),
+    )
     loaded: int = Field(
         0,
         description=(
@@ -465,7 +471,7 @@ class HubStatusResponse(OpenAIBaseModel):
         description="Registered models plus their metadata as reported by the registry.",
     )
     counts: HubStatusCounts = Field(
-        default_factory=lambda: HubStatusCounts(registered=0, loaded=0),
+        default_factory=lambda: HubStatusCounts(registered=0, started=0, loaded=0),
         description="Summary counts derived from the registry snapshot.",
     )
     warnings: list[str] = Field(

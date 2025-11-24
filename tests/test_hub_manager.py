@@ -6,11 +6,9 @@ from collections import defaultdict
 import itertools
 from pathlib import Path
 
-import pytest
 import yaml
 
 from app.config import MLXServerConfig
-from app.hub.errors import HubControllerError
 from app.hub.manager import HubManager, ManagedProcess
 from app.hub.observability import HubModelContext
 
@@ -246,7 +244,6 @@ def test_hub_manager_releases_group_slot_after_crash(tmp_path: Path) -> None:
     crashing = factory.last("alpha")
     crashing.force_exit(7)
     manager.get_status()
-    assert manager._group_usage["tier"] == 0  # internal health signal
 
     _write_hub_config(
         config_path,
@@ -260,8 +257,8 @@ def test_hub_manager_releases_group_slot_after_crash(tmp_path: Path) -> None:
     assert set(result.stopped) == {"alpha"}
 
 
-def test_hub_manager_enforces_group_limit(tmp_path: Path) -> None:
-    """Manual starts should fail when a group exceeds its max_loaded cap."""
+def test_hub_manager_ignores_group_limit_for_processes(tmp_path: Path) -> None:
+    """Manual starts should always be allowed regardless of group max_loaded."""
 
     config_path = tmp_path / "hub.yaml"
     log_path = tmp_path / "logs"
@@ -279,8 +276,8 @@ def test_hub_manager_enforces_group_limit(tmp_path: Path) -> None:
     )
 
     manager.reload()
-    with pytest.raises(HubControllerError, match="no available capacity"):
-        manager.start_model("beta")
+    manager.start_model("beta")
+    assert len(factory.instances["beta"]) == 1
 
 
 def test_hub_manager_emits_observability_events(tmp_path: Path) -> None:

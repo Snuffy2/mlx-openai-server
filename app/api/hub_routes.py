@@ -5,7 +5,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from pathlib import Path
 import time
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -38,7 +38,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
 <head>
     <meta charset=\"utf-8\" />
     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-    <title>MLX OpenAI Server Hub Status</title>
+    <title>MLX Hub Status · MLX OpenAI Server</title>
     <style>
         :root {
             color-scheme: dark;
@@ -217,11 +217,24 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             border-color: rgba(247, 122, 122, 0.35);
             color: #ffc1c1;
         }
+        .stat-block {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .stat-line {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        .stat-line--subtle {
+            font-size: 1rem;
+            color: #b0b5c0;
+        }
     </style>
 </head>
 <body>
     <header>
-        <h1>MLX OpenAI Server Hub Status</h1>
+        <h1>MLX Hub Status • MLX OpenAI Server</h1>
         <p>Live snapshot of registered models, groups, and controller health.</p>
     </header>
 
@@ -229,21 +242,25 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
     <div id="flash-banner" class="flash flash--info" hidden></div>
     <div id=\"toast\" class=\"toast\" hidden></div>
 
-    <section class=\"card\">
-        <div class=\"grid\">
-            <div>
-                <div class=\"muted\">Hub status</div>
-                <div id=\"status-pill\" class=\"pill pill--warn\">Loading…</div>
+    <section class="card">
+        <div class="grid">
+            <div class="stat-block">
+                <div class="muted">Hub status</div>
+                <div id="status-pill" class="pill pill--warn">Loading…</div>
             </div>
-            <div>
-                <div id=\"counts\">—</div>
+            <div class="stat-block">
+                <div class="muted">Processes</div>
+                <div id="started-counts" class="stat-line">—</div>
+                <div id="counts" class="stat-line">—</div>
             </div>
-            <div>
-                <div class=\"muted\">Last updated</div>
-                <div id=\"updated-at\">—</div>
+            <div class="stat-block">
+                <div class="muted">Last updated</div>
+                <div id="updated-at" class="stat-line">—</div>
+                <div class="muted" style="margin-top: 8px;">OpenAI URL</div>
+                <div id="openai-url" class="stat-line">—</div>
             </div>
-            <div>
-                <div class=\"muted\">Controls</div>
+            <div class="stat-block">
+                <div class="muted">Controls</div>
                 <div class="actions">
                     <button class="refresh-btn" type="button">Refresh</button>
                     <button class="action-btn action-btn--secondary" type="button" data-service-action="reload">Reload</button>
@@ -251,9 +268,9 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                 </div>
             </div>
         </div>
-        <div id=\"warnings\" class=\"warnings\" hidden>
+        <div id="warnings" class="warnings" hidden>
             <strong>Warnings</strong>
-            <ul id=\"warning-list\"></ul>
+            <ul id="warning-list"></ul>
         </div>
     </section>
 
@@ -265,6 +282,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                     <th>Name</th>
                     <th>Process</th>
                     <th>Memory</th>
+                    <th>Auto-Unload</th>
                     <th>Type</th>
                     <th>Group</th>
                     <th>Default</th>
@@ -325,6 +343,24 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             pill.className = `pill ${map[value] ?? 'pill--warn'}`;
         }
 
+        function formatOpenAiUrl(hostValue, portValue) {
+            let host = typeof hostValue === 'string' ? hostValue.trim() : '';
+            if (!host) {
+                return '—';
+            }
+            if (host === '0.0.0.0' || host === '::' || host === '[::]') {
+                host = 'localhost';
+            }
+            if (host.includes(':') && !(host.startsWith('[') && host.endsWith(']'))) {
+                host = `[${host}]`;
+            }
+            let port = Number(portValue);
+            if (!Number.isFinite(port) || port <= 0) {
+                port = 8000;
+            }
+            return `http://${host}:${port}/v1`;
+        }
+
         function renderWarnings(warnings) {
             const wrapper = document.getElementById('warnings');
             const list = document.getElementById('warning-list');
@@ -340,11 +376,18 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
         function describeProcess(meta) {
             const state = String(meta.process_state ?? 'inactive').toLowerCase();
             const pid = meta.pid ? `PID ${meta.pid}` : null;
+            const port = meta.port ? `PORT ${meta.port}` : null;
             const exitInfo = meta.exit_code && meta.exit_code !== 0 ? `exit ${meta.exit_code}` : null;
-            const detail = state === 'running' ? pid : exitInfo;
             const pieces = [state.toUpperCase()];
-            if (detail) {
-                pieces.push(detail);
+            if (state === 'running') {
+                if (pid) {
+                    pieces.push(pid);
+                }
+                if (port) {
+                    pieces.push(port);
+                }
+            } else if (exitInfo) {
+                pieces.push(exitInfo);
             }
             return pieces.join(' • ');
         }
@@ -355,7 +398,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             const error = meta.memory_last_error ? `Error: ${escapeHtml(meta.memory_last_error)}` : null;
             const pieces = [state.toUpperCase()];
             if (transition) {
-                pieces.push(`@ ${transition}`);
+                pieces.push(`${transition}`);
             }
             return {
                 label: pieces.join(' • '),
@@ -366,7 +409,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
         function renderModels(models) {
             const body = document.getElementById('models-body');
             if (!models || models.length === 0) {
-                body.innerHTML = '<tr><td colspan="8">No models registered.</td></tr>';
+                body.innerHTML = '<tr><td colspan="9">No models registered.</td></tr>';
                 return;
             }
             body.innerHTML = models
@@ -376,12 +419,17 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                     const memoryState = String(meta.memory_state ?? 'unloaded').toLowerCase();
                     const processRunning = processState === 'running';
                     const group = meta.group ?? '—';
-                    const defaultFlag = meta.default ? 'auto-start' : 'manual';
+                    const defaultFlag = meta.default ? '✅' : '—';
                     const modelType = meta.model_type ?? 'n/a';
                     const modelPath = meta.model_path ?? '';
+                    const autoUnloadMinutes = meta.auto_unload_minutes;
+                    const autoUnloadLabel = Number.isFinite(autoUnloadMinutes) ? `${autoUnloadMinutes} min` : '—';
                     const safeId = escapeHtml(model.id);
                     const processLabel = describeProcess(meta);
                     const memoryDescriptor = describeMemory(meta);
+                    const memoryCell = processRunning
+                        ? `<div>${escapeHtml(memoryDescriptor.label)}</div>${memoryDescriptor.error ? `<div class="muted">${memoryDescriptor.error}</div>` : ''}`
+                        : '<div>—</div>';
                     const processStartVisible = !processRunning;
                     const processStopVisible = processRunning;
                     const processStartDisabled = ['starting'].includes(processState);
@@ -395,9 +443,9 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                         <td>${safeId}</td>
                         <td>${escapeHtml(processLabel)}</td>
                         <td>
-                            <div>${escapeHtml(memoryDescriptor.label)}</div>
-                            ${memoryDescriptor.error ? `<div class="muted">${memoryDescriptor.error}</div>` : ''}
+                            ${memoryCell}
                         </td>
+                        <td>${escapeHtml(autoUnloadLabel)}</td>
                         <td>${escapeHtml(modelType)}</td>
                         <td>${escapeHtml(group)}</td>
                         <td>${escapeHtml(defaultFlag)}</td>
@@ -591,8 +639,13 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                 }
                 clearError();
                 setStatusPill(data.status ?? 'unknown');
-                document.getElementById('counts').textContent = `${data.counts?.loaded ?? 0} / ${data.counts?.registered ?? 0} loaded`;
+                const registered = data.counts?.registered ?? 0;
+                const started = data.counts?.started ?? 0;
+                const loaded = data.counts?.loaded ?? 0;
+                document.getElementById('started-counts').textContent = `${started} / ${registered} started`;
+                document.getElementById('counts').textContent = `${loaded} / ${registered} loaded`;
                 document.getElementById('updated-at').textContent = formatTimestamp(data.timestamp);
+                document.getElementById('openai-url').textContent = formatOpenAiUrl(data.host, data.port);
                 renderWarnings(warningList);
                 renderModels(data.models ?? []);
             } catch (error) {
@@ -877,9 +930,11 @@ def _build_models_from_config(
             "model_path": server_cfg.model_path,
             "log_path": live.get("log_path") or server_cfg.log_file,
             "pid": live.get("pid"),
+            "port": live.get("port") or server_cfg.port,
             "started_at": live.get("started_at"),
             "stopped_at": live.get("stopped_at"),
             "exit_code": live.get("exit_code"),
+            "auto_unload_minutes": server_cfg.auto_unload_minutes,
         }
         if runtime_summary is not None:
             metadata["memory_last_error"] = runtime_summary.get("last_error")
@@ -895,8 +950,63 @@ def _build_models_from_config(
         )
 
     loaded_count = memory_loaded if runtime_lookup else process_running
-    counts = HubStatusCounts(registered=len(rendered), loaded=loaded_count)
+    counts = HubStatusCounts(
+        registered=len(rendered),
+        started=process_running,
+        loaded=loaded_count,
+    )
     return rendered, counts
+
+
+def get_running_hub_models(raw_request: Request) -> set[str] | None:
+    """Return the set of model names whose processes are currently running.
+
+    Parameters
+    ----------
+    raw_request : Request
+        FastAPI request containing hub server state.
+
+    Returns
+    -------
+    set[str] | None
+        Names of running models, or ``None`` when the service is unavailable.
+    """
+
+    server_config = getattr(raw_request.app.state, "server_config", None)
+    if not isinstance(server_config, MLXHubConfig):
+        return None
+
+    try:
+        config = _load_hub_config_from_request(raw_request)
+    except HubConfigError:
+        return None
+
+    client = _build_service_client(config)
+    if not _ensure_manager_available(client):
+        return None
+
+    try:
+        snapshot = client.status()
+    except HubServiceError as exc:
+        logger.debug(
+            f"Hub manager status unavailable; skipping running model filter. {type(exc).__name__}: {exc}"
+        )
+        return None
+
+    running: set[str] = set()
+    models = snapshot.get("models") if isinstance(snapshot, dict) else None
+    if not isinstance(models, list):
+        return running
+
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        state = str(entry.get("state") or "").lower()
+        if isinstance(name, str) and state == "running":
+            running.add(name)
+
+    return running
 
 
 def _build_legacy_hub_status(raw_request: Request) -> HubStatusResponse:
@@ -952,7 +1062,11 @@ def _build_legacy_hub_status(raw_request: Request) -> HubStatusResponse:
         if model.metadata is not None and model.metadata.get("status") == "initialized"
     )
 
-    counts = HubStatusCounts(registered=len(models_data), loaded=loaded_count)
+    counts = HubStatusCounts(
+        registered=len(models_data),
+        started=loaded_count,
+        loaded=loaded_count,
+    )
     warnings = list(dict.fromkeys(warnings))  # preserve order but deduplicate
 
     return HubStatusResponse(
@@ -1003,7 +1117,10 @@ def get_configured_model_id(raw_request: Request) -> str | None:
     """
     config = getattr(raw_request.app.state, "server_config", None)
     if config is not None:
-        return getattr(config, "model_identifier") or getattr(config, "model_path", None)
+        identifier = cast("str | None", getattr(config, "model_identifier", None))
+        if identifier:
+            return identifier
+        return getattr(config, "model_path", None)
 
     cached = get_cached_model_metadata(raw_request)
     if cached is not None:

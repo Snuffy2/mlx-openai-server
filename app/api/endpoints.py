@@ -50,6 +50,7 @@ from ..utils.errors import create_error_response
 from .hub_routes import (
     get_cached_model_metadata,
     get_configured_model_id,
+    get_running_hub_models,
     hub_memory_load_model,
     hub_memory_unload_model,
     hub_router,
@@ -239,6 +240,20 @@ def _resolve_model_name(
 
     if not provided_explicitly or normalized is None:
         return None, _hub_model_required_error()
+
+    running_models = get_running_hub_models(raw_request)
+    if running_models is not None and normalized not in running_models:
+        return (
+            None,
+            JSONResponse(
+                content=create_error_response(
+                    f"Model '{normalized}' is not started. Start the process before sending requests.",
+                    "invalid_request_error",
+                    HTTPStatus.NOT_FOUND,
+                ),
+                status_code=HTTPStatus.NOT_FOUND,
+            ),
+        )
     return normalized, None
 
 
@@ -285,6 +300,7 @@ async def health(raw_request: Request) -> HealthCheckResponse | JSONResponse:
     """
     handler_manager = getattr(raw_request.app.state, "handler_manager", None)
     configured_model_id = get_configured_model_id(raw_request)
+    controller = getattr(raw_request.app.state, "hub_controller", None)
 
     if handler_manager is not None:
         handler = getattr(handler_manager, "current_handler", None)
@@ -297,6 +313,13 @@ async def health(raw_request: Request) -> HealthCheckResponse | JSONResponse:
             status=HealthCheckStatus.OK,
             model_id=configured_model_id,
             model_status="unloaded",
+        )
+
+    if controller is not None:
+        return HealthCheckResponse(
+            status=HealthCheckStatus.OK,
+            model_id=configured_model_id,
+            model_status="controller",
         )
 
     handler = getattr(raw_request.app.state, "handler", None)
@@ -334,6 +357,9 @@ async def models(raw_request: Request) -> ModelsResponse | JSONResponse:
     if registry is not None:
         try:
             models_data = registry.list_models()
+            running_models = get_running_hub_models(raw_request)
+            if running_models is not None:
+                models_data = [model for model in models_data if model.get("id") in running_models]
             return ModelsResponse(object="list", data=[Model(**model) for model in models_data])
         except Exception as e:
             logger.error(f"Error retrieving models from registry. {type(e).__name__}: {e}")

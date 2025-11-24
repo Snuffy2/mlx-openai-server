@@ -5,7 +5,7 @@ This document expands on the **Hub Mode** section in the project README and desc
 ## Architecture Overview
 
 1. **HubManager (process orchestrator)**
-   - Loads `hub.yaml`, validates model/group definitions, enforces group capacity, and spawns a dedicated subprocess per model using the standard single-model server entrypoint.
+   - Loads `hub.yaml`, validates model/group definitions, and spawns a dedicated subprocess per model using the standard single-model server entrypoint. Group `max_loaded` limits are enforced later by the in-process runtime when a handler tries to load into memory.
    - Persists telemetry (`hub-manager.log`, `<model>.log`, `hub-manager.pid`, and `hub-manager.sock`) inside the configured `log_path`.
    - Emits structured observability events via `HubObservabilitySink` so you can stream process lifecycle updates to third-party collectors.
 2. **HubService (IPC server)**
@@ -23,6 +23,7 @@ This document expands on the **Hub Mode** section in the project README and desc
 ```yaml
 host: 0.0.0.0           # optional, defaults to 0.0.0.0
 port: 8000              # optional, defaults to 8000
+model_starting_port: 47850  # optional, defaults to 47850 for auto-assigned workers
 log_level: INFO         # optional, defaults to INFO
 log_path: ~/mlx-openai-server/logs  # auto-created if missing
 enable_status_page: true
@@ -38,7 +39,7 @@ models:
     model_path: /models/beta
     group: tier_one
 
-# Optional throttling groups (max_loaded >= 1)
+# Optional memory-throttling groups (max_loaded >= 1)
 groups:
   - name: tier_one
     max_loaded: 1
@@ -47,9 +48,10 @@ groups:
 Validation highlights:
 
 - Model and group names must already be slug-compliant; invalid values raise `HubConfigError`.
-- Default models inside a group cannot exceed `max_loaded`, since each default immediately starts a worker process when the hub launches.
+- Default models inside a group may exceed `max_loaded`; every worker can still start, but only `max_loaded` handlers from that group can be loaded into memory at once.
 - `log_path` is expanded and created automatically, ensuring log files and socket/PID artifacts share the same directory tree.
 - Referencing a group without defining it is permitted when you plan to add the group later; set `groups` explicitly to enforce caps.
+- Auto-assigned model ports start at `model_starting_port` (defaults to `47850`). The loader probes each candidate socket and skips busy ports. Override `port` explicitly when you need fixed values, but never reuse the controller's `host:port` or another model's port.
 
 ## CLI Workflows & Flash Messaging
 
@@ -59,9 +61,9 @@ Validation highlights:
 | `hub status [MODEL ...]` | Reloads `hub.yaml`, syncs with the service, and prints per-model summaries. |
 | `hub reload` | Forces the service to reload YAML and emits a flash summary of started/stopped/unchanged models. |
 | `hub stop` | Reloads one last time, requests shutdown, and confirms via flash message. |
-| `hub start-model MODEL [...]` | Reloads then calls `start_model` for each name; surfaces OpenAI-style 429 errors when groups are saturated. |
+| `hub start-model MODEL [...]` | Reloads then calls `start_model` for each name to ensure the worker process is running. |
 | `hub stop-model MODEL [...]` | Reloads then calls `stop_model` for each name. |
-| `hub load-model MODEL [...]` | Talks to the controller to instantiate handlers in memory for running workers. |
+| `hub load-model MODEL [...]` | Talks to the controller to instantiate handlers in memory for running workers; returns OpenAI-style 429 errors when a group's `max_loaded` cap is saturated. |
 | `hub unload-model MODEL [...]` | Tells the controller to dispose of in-memory handlers while leaving the worker alive. |
 | `hub watch [--interval N]` | Streams `/hub/status` snapshots with uptime, exit codes, and log filenames. |
 

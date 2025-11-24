@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+from textwrap import dedent
 import threading
 
 import pytest
@@ -85,12 +86,15 @@ def _write_hub_yaml(tmp_path: Path, *, test_id: str) -> tuple[Path, Path]:
     log_dir.mkdir(parents=True, exist_ok=True)
     hub_yaml = tmp_path / f"{test_id}.yaml"
     hub_yaml.write_text(
-        f"""
-log_path: {log_dir}
-models:
-  - name: alpha
-    model_path: /models/alpha
-""".strip()
+        dedent(
+            f"""
+            log_path: {log_dir}
+            models:
+              - name: alpha
+                model_path: /models/alpha
+                default: true
+            """
+        ).strip()
     )
     return hub_yaml, log_dir
 

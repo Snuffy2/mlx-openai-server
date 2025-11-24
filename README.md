@@ -764,6 +764,7 @@ Top-level keys:
 | --- | --- | --- | --- | --- |
 | `host` | string | — | `0.0.0.0` | Hostname for the shared OpenAI endpoint. |
 | `port` | integer | — | `8000` | Port exposed to clients. |
+| `model_starting_port` | integer | — | `47850` | Base port for auto-assigned model workers. Ports increment sequentially and skip sockets that appear busy. |
 | `log_level` | string | — | `INFO` | Log level inherited by models unless overridden. |
 | `log_path` | string | — | `~/mlx-openai-server/logs` | Directory for hub logs. The controller stores each model's logs under `log_path/<name>.log`. |
 | `enable_status_page` | bool | — | `true` | Enables the `/hub` HTML status page that polls `/hub/status`. |
@@ -774,15 +775,17 @@ Each entry under `models` accepts every `MLXServerConfig` option plus hub-specif
 
 - `name` (required, slug-compliant) – Friendly identifier referenced by clients. The hub validates the slug format (letters in any case, numbers, `-` or `_`) but does not modify the provided value.
 - `model_path` (required) – Local path or Hugging Face repo ID.
-- `default` (optional, bool) – Models with `true` start their background process automatically when the hub starts. When attached to a group, the number of default models cannot exceed that group's `max_loaded` value.
+- `default` (optional, bool) – Models with `true` start their background process automatically when the hub starts. When attached to a group, defaults are still allowed to start, but only `max_loaded` models from that group can be memory-loaded at the same time.
 - `group` (optional, slug) – Associates the model with a group defined under `groups`.
 - `log_file` / `no_log_file` – Override hub-level logging rules if needed.
 - Any existing CLI flag (e.g., `model_type`, `jit_enabled`, `auto_unload_minutes`, `tool_call_parser`, ...).
 
+> **Port allocation:** When a model omits the `port` field, the loader assigns sequential ports starting at `model_starting_port` (default `47850`). Each candidate socket is probed and busy ports are skipped automatically so the FastAPI controller can continue using the primary `host:port`. Explicit `port` values must be unique and cannot reuse the controller's port.
+
 `groups` entries describe shared constraints:
 
 - `name` (required, slug as provided) – Must already satisfy slug rules (letters in any case, numbers, `-` or `_`). The hub validates inputs but never mutates them.
-- `max_loaded` (optional, integer ≥ 1) – Maximum simultaneously loaded models within the group. Exceeding the cap will eventually return an OpenAI-style `429`. Models flagged as `default: true` in this group must not exceed the same limit or the YAML load will fail fast.
+- `max_loaded` (optional, integer ≥ 1) – Maximum simultaneously loaded models within the group. Attempts to load additional models beyond the cap return an OpenAI-style `429`, but the worker processes are still allowed to run and will load once a slot opens.
 
 #### Example `hub.yaml`
 

@@ -206,3 +206,41 @@ def test_hub_html_status_page_disabled(
     response = client.get("/hub")
 
     assert response.status_code == HTTPStatus.NOT_FOUND
+
+
+def test_models_endpoint_hides_unstarted_entries(
+    hub_test_client: tuple[TestClient, _FakeHubController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /v1/models should only list models reported as running."""
+
+    client, _ = hub_test_client
+
+    monkeypatch.setattr(endpoints, "get_running_hub_models", lambda _request: {"alpha"})
+
+    response = client.get("/v1/models")
+    assert response.status_code == HTTPStatus.OK
+    data = response.json()["data"]
+    assert [entry["id"] for entry in data] == ["alpha"]
+
+
+def test_chat_completion_rejects_unstarted_models(
+    hub_test_client: tuple[TestClient, _FakeHubController],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Requests referencing stopped models should return 404."""
+
+    client, _ = hub_test_client
+    monkeypatch.setattr(endpoints, "get_running_hub_models", lambda _request: {"alpha"})
+
+    payload = {
+        "model": "beta",
+        "messages": [
+            {"role": "user", "content": "ping"},
+        ],
+    }
+
+    response = client.post("/v1/chat/completions", json=payload)
+
+    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert "not started" in response.text

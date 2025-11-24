@@ -159,7 +159,7 @@ def test_hub_status_uses_service_snapshot(
 
     assert response.status_code == HTTPStatus.OK
     payload = response.json()
-    assert payload["counts"] == {"registered": 2, "loaded": 1}
+    assert payload["counts"] == {"registered": 2, "started": 1, "loaded": 1}
     assert payload["models"][0]["metadata"]["default"] is True
     assert payload["models"][0]["metadata"]["status"] == "running"
     assert state.reload_calls == 1

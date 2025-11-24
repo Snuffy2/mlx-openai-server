@@ -40,8 +40,8 @@ def test_load_hub_config_rejects_unknown_group_when_declared(tmp_path: Path) -> 
         load_hub_config(hub_path)
 
 
-def test_group_default_limit_enforced(tmp_path: Path) -> None:
-    """Default models within a group must respect max_loaded caps."""
+def test_group_default_limit_not_enforced(tmp_path: Path) -> None:
+    """Default process counts should not be limited by max_loaded."""
 
     hub_path = _write_hub_file(
         tmp_path,
@@ -64,8 +64,8 @@ def test_group_default_limit_enforced(tmp_path: Path) -> None:
         ).strip(),
     )
 
-    with pytest.raises(HubConfigError, match="max_loaded"):
-        load_hub_config(hub_path)
+    config = load_hub_config(hub_path)
+    assert [model.name for model in config.models] == ["alpha", "beta"]
 
 
 def test_hub_runtime_bootstrap_and_selection(tmp_path: Path) -> None:

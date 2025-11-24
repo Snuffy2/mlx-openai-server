@@ -18,7 +18,7 @@ from loguru import logger
 
 from ..config import MLXServerConfig
 from .config import MLXHubConfig, load_hub_config
-from .errors import HubControllerError, HubManagerError, HubProcessError
+from .errors import HubManagerError, HubProcessError
 from .observability import HubModelContext, HubObservabilitySink, LoggingHubObservabilitySink
 
 
@@ -146,7 +146,6 @@ class HubProcessRecord:
     started_at: float = field(default_factory=time.time)
     stopped_at: float | None = None
     exit_code: int | None = None
-    group_slot_released: bool = False
     exit_handled: bool = False
 
     def refresh(self) -> None:
@@ -201,6 +200,7 @@ class HubModelStatus:
     group: str | None
     log_path: str | None
     pid: int | None
+    port: int | None
     exit_code: int | None
     started_at: float | None
     stopped_at: float | None
@@ -237,8 +237,6 @@ class HubManager:
         self._records: dict[str, HubProcessRecord] = {}
         self._model_configs: dict[str, MLXServerConfig] = {}
         self._hub_config: MLXHubConfig | None = None
-        self._group_limits: dict[str, int | None] = {}
-        self._group_usage: dict[str, int] = {}
         self._observability: HubObservabilitySink = (
             observability_sink or LoggingHubObservabilitySink()
         )
@@ -251,12 +249,19 @@ class HubManager:
         HubReloadResult
             Summary of changes made during reload.
         """
+        with self._lock:
+            persisted_ports = {
+                name: config.port
+                for name, config in self._model_configs.items()
+                if config.port is not None
+            }
 
-        config = load_hub_config(self._config_path)
+        config = load_hub_config(self._config_path, persisted_ports=persisted_ports)
 
         with self._lock:
+            previous_configs = dict(self._model_configs)
             self._refresh_all_records_locked()
-            return self._apply_config(config)
+            return self._apply_config(config, previous_configs)
 
     def start_model(self, name: str) -> None:
         """Ensure the specified model process is running.
@@ -317,6 +322,7 @@ class HubManager:
                         group=record.config.group,
                         log_path=str(record.log_path) if record.log_path else None,
                         pid=record.pid,
+                        port=record.config.port,
                         exit_code=record.exit_code,
                         started_at=record.started_at,
                         stopped_at=record.stopped_at,
@@ -336,7 +342,9 @@ class HubManager:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _apply_config(self, config: MLXHubConfig) -> HubReloadResult:
+    def _apply_config(
+        self, config: MLXHubConfig, previous_configs: dict[str, MLXServerConfig]
+    ) -> HubReloadResult:
         """Apply a new hub configuration, starting/stopping processes as needed.
 
         Parameters
@@ -351,9 +359,6 @@ class HubManager:
         """
 
         self._hub_config = config
-        self._group_limits = {group.name: group.max_loaded for group in config.groups}
-        for group in self._group_limits:
-            self._group_usage.setdefault(group, 0)
 
         desired = {model.name: model for model in config.models if model.name}
         current_names = set(self._records)
@@ -364,6 +369,7 @@ class HubManager:
         maybe_updated = desired_names & current_names
 
         result = HubReloadResult()
+        previous_configs = previous_configs or {}
 
         for name in removed:
             self._stop_model_locked(name)
@@ -385,7 +391,8 @@ class HubManager:
 
         for name in added:
             config_obj = desired[name]
-            if config_obj.is_default_model:
+            previously_known = name in previous_configs
+            if config_obj.is_default_model and not previously_known:
                 self._start_model_locked(config_obj)
                 result.started.append(name)
             else:
@@ -409,8 +416,6 @@ class HubManager:
         ------
         HubManagerError
             If the model name is missing.
-        HubControllerError
-            If group capacity is exceeded.
         HubProcessError
             If starting the process fails.
         """
@@ -418,15 +423,6 @@ class HubManager:
         name = config.name
         if not name:
             raise HubManagerError("Cannot start unnamed model entry")
-        group = config.group
-        if group:
-            limit = self._group_limits.get(group)
-            current = self._group_usage.get(group, 0)
-            if limit is not None and current >= limit:
-                raise HubControllerError(
-                    f"Group '{group}' has no available capacity (max_loaded={limit})",
-                    status_code=429,
-                )
         process = self._process_factory(config)
         log_path = Path(config.log_file).expanduser() if config.log_file else None
         try:
@@ -435,8 +431,6 @@ class HubManager:
             raise HubProcessError(f"Failed to start process for model '{name}': {exc}") from exc
         record = HubProcessRecord(name=name, config=config, process=process, log_path=log_path)
         self._records[name] = record
-        if group:
-            self._group_usage[group] = self._group_usage.get(group, 0) + 1
         self._observability.model_started(record.context(), pid=process.pid)
 
     def _stop_model_locked(self, name: str, *, update_structures: bool = True) -> None:
@@ -458,7 +452,6 @@ class HubManager:
         except Exception as exc:  # pragma: no cover - defensive guard
             raise HubProcessError(f"Failed to stop process for model '{name}': {exc}") from exc
         record.refresh()
-        self._release_group_slot_locked(record)
         if not record.exit_handled:
             self._observability.model_stopped(record.context(), exit_code=record.exit_code)
         if update_structures:
@@ -544,25 +537,7 @@ class HubManager:
         if record.exit_handled:
             return
         record.exit_handled = True
-        self._release_group_slot_locked(record)
         if record.exit_code == 0:
             self._observability.model_stopped(record.context(), exit_code=record.exit_code)
         else:
             self._observability.model_failed(record.context(), exit_code=record.exit_code)
-
-    def _release_group_slot_locked(self, record: HubProcessRecord) -> None:
-        """Release the group slot for a record.
-
-        Parameters
-        ----------
-        record : HubProcessRecord
-            The record to release the slot for.
-        """
-
-        group = record.config.group
-        if not group or record.group_slot_released:
-            return
-        current = self._group_usage.get(group, 0)
-        if current > 0:
-            self._group_usage[group] = current - 1
-        record.group_slot_released = True

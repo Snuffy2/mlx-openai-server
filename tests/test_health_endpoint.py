@@ -83,6 +83,19 @@ def test_health_reports_initialized_when_handler_loaded() -> None:
     assert response.model_id == "loaded-model"
 
 
+def test_health_reports_ok_when_controller_present() -> None:
+    """Hub controller alone should mark the health endpoint as OK."""
+
+    state = _build_state(handler_manager=None, handler=None)
+    state.hub_controller = object()
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+
+    response = asyncio.run(endpoints.health(request))
+    assert isinstance(response, HealthCheckResponse)
+    assert response.status == HealthCheckStatus.OK
+    assert response.model_status == "controller"
+
+
 def test_hub_status_prefers_registry_snapshot() -> None:
     """Hub status should reflect registry data when available."""
 
@@ -114,6 +127,7 @@ def test_hub_status_prefers_registry_snapshot() -> None:
     response = asyncio.run(endpoints.hub_status(request))
     assert isinstance(response, HubStatusResponse)
     assert response.counts.registered == 2
+    assert response.counts.started == 1
     assert response.counts.loaded == 1
     assert response.warnings == []
     assert response.controller_available is False
@@ -129,6 +143,7 @@ def test_hub_status_falls_back_to_cached_metadata() -> None:
     response = asyncio.run(endpoints.hub_status(request))
     assert isinstance(response, HubStatusResponse)
     assert response.counts.registered == 1
+    assert response.counts.started == 0
     assert response.warnings  # warning present
     assert response.controller_available is False
 

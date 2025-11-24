@@ -41,11 +41,13 @@ def test_build_models_includes_runtime_metadata(tmp_path: Path) -> None:
 
     models, counts = _build_models_from_config(config, _live_snapshot(), runtime)
     metadata = models[0].metadata
+    assert metadata is not None
 
     assert metadata["process_state"] == "running"
     assert metadata["memory_state"] == "loaded"
     assert metadata["status"] == "loaded"  # prefers memory state when available
     assert metadata["memory_last_transition_at"] is not None
+    assert counts.started == 1
     assert counts.loaded == 1
 
 
@@ -56,8 +58,10 @@ def test_build_models_without_runtime_defaults_to_process(tmp_path: Path) -> Non
 
     models, counts = _build_models_from_config(config, _live_snapshot(), runtime=None)
     metadata = models[0].metadata
+    assert metadata is not None
 
     assert metadata["process_state"] == "running"
     assert metadata["memory_state"] is None
     assert metadata["status"] == "running"
+    assert counts.started == 1
     assert counts.loaded == 1
