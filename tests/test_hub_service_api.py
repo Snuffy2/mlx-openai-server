@@ -139,7 +139,9 @@ models:
 
     _StubServiceClient.state = state
 
-    async def _stub_call(config, method: str, path: str, *, json=None, timeout: float = 5.0):
+    async def _stub_call(
+        config: Any, method: str, path: str, *, json: Any | None = None, timeout: float = 5.0
+    ) -> dict[str, Any]:
         # Emulate the daemon HTTP surface used by the routes.
         if method == "GET" and path == "/health":
             if not _StubServiceClient.state.available:

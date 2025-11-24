@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import click
 from click.testing import CliRunner
 import pytest
 
 from app.cli import _render_watch_table, cli
+from app.hub.config import MLXHubConfig
 
 
 @pytest.fixture
@@ -62,7 +64,14 @@ def test_hub_reload_cli_reloads_service(
 
     stub = _StubServiceClient()
 
-    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+    def _call_stub(
+        _config: MLXHubConfig,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, object] | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
         if method == "POST" and path == "/hub/reload":
             return stub.reload()
         if method == "GET" and path == "/health":
@@ -87,7 +96,14 @@ def test_hub_stop_cli_requests_shutdown(
 
     build_calls = {"count": 0}
 
-    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+    def _call_stub(
+        _config: MLXHubConfig,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, object] | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
         # emulate availability check and reload/shutdown behavior
         if method == "GET" and path == "/health":
             return {"status": "ok"}
@@ -131,7 +147,14 @@ def test_hub_start_model_cli_uses_service_client(
 
     stub = _StubServiceClient()
 
-    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+    def _call_stub(
+        _config: MLXHubConfig,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, object] | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
         if method == "POST" and path.startswith("/hub/models/") and path.endswith("/start"):
             name = path.split("/")[-2]
             stub.start_model(name)
@@ -159,7 +182,14 @@ def test_hub_stop_model_cli_uses_service_client(
 
     stub = _StubServiceClient()
 
-    def _call_stub(_config, method: str, path: str, *, json=None, timeout: float = 5.0):
+    def _call_stub(
+        _config: MLXHubConfig,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, object] | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, Any]:
         if method == "POST" and path.startswith("/hub/models/") and path.endswith("/stop"):
             name = path.split("/")[-2]
             stub.stop_model(name)

@@ -49,6 +49,7 @@ class _StubSupervisor:
 
 @pytest.mark.asyncio
 async def test_daemon_health_and_status(tmp_path: Path) -> None:
+    """Health and status endpoints return expected shapes."""
     cfg = tmp_path / "hub.yaml"
     cfg.write_text(
         """
@@ -77,6 +78,7 @@ models:
 
 @pytest.mark.asyncio
 async def test_model_start_stop_and_memory_actions(tmp_path: Path) -> None:
+    """Model lifecycle endpoints start/stop/load/unload behave as expected."""
     cfg = tmp_path / "hub.yaml"
     cfg.write_text(
         """
@@ -112,6 +114,7 @@ models:
 
 @pytest.mark.asyncio
 async def test_shutdown_schedules_background_task(tmp_path: Path) -> None:
+    """POST /hub/shutdown schedules the supervisor shutdown background task."""
     cfg = tmp_path / "hub.yaml"
     cfg.write_text(
         """
