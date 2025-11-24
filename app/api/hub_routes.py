@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from http import HTTPStatus
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -73,7 +74,14 @@ def start_hub_service_process(
         "--port",
         port_val,
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Propagate the provided hub config path to the spawned daemon via
+    # `MLX_HUB_CONFIG_PATH` so the child process can load a non-default
+    # `hub.yaml` without modifying the uvicorn invocation.
+    env = os.environ.copy()
+    if config_path:
+        env["MLX_HUB_CONFIG_PATH"] = str(config_path)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     return proc.pid
 
 
@@ -740,22 +748,22 @@ def _resolve_hub_config_path(raw_request: Request) -> Path:
 
 
 def _stop_controller_process(config: MLXHubConfig) -> bool:
-    """Stop the hub controller using a late import to avoid cycles.
+    """Request the hub daemon to stop the controller and managed processes.
+
+    This function proxies the shutdown request to the hub daemon HTTP API
+    (POST /hub/shutdown) so the controller and supervised processes are
+    stopped in the daemon process. Returns True on success and False when
+    the daemon reports a service-level failure or is unreachable.
 
     Parameters
     ----------
     config : MLXHubConfig
-        The hub configuration.
+        The hub configuration used to determine the daemon base URL.
 
     Returns
     -------
     bool
         True if the controller was stopped, False otherwise.
-    """
-    """Request the daemon to stop the controller/processes.
-
-    The legacy `app.hub.server` module is no longer supported; always use
-    the hub daemon HTTP API to request shutdown.
     """
     try:
         _call_daemon_api_sync(config, "POST", "/hub/shutdown", timeout=1.0)

@@ -1,19 +1,18 @@
-## Temp steps to resume Hub Daemon migration
+# Temp steps to resume Hub Daemon migration
 
 This file captures the concrete steps required to migrate the existing multi-process hub work into a single-daemon FastAPI supervisor (the "hub daemon"). Use this as an implementation checklist for an agent applying the change set.
 
 Summary
- - Goal: Add a single FastAPI-based daemon that owns process supervision and runtime state, and update the CLI to control it via HTTP. No backwards compatibility shims will be kept.
- - Entrypoint: `app/hub/daemon.py` (FastAPI app factory `create_app`).
+- Goal: Add a single FastAPI-based daemon that owns process supervision and runtime state, and update the CLI to control it via HTTP. No backwards compatibility shims will be kept.
+- Entrypoint: `app/hub/daemon.py` (FastAPI app factory `create_app`).
 
 Required edits (high-level)
- - Create `app/hub/daemon.py` implementing `HubSupervisor` and FastAPI endpoints: `GET /health`, `GET /hub/status`, `POST /hub/reload`, `POST /hub/shutdown`, `POST /hub/models/{name}/start`, `POST /hub/models/{name}/stop`, `POST /hub/models/{name}/load-model`, `POST /hub/models/{name}/unload-model`.
- - Replace `app/hub/service.py` usage: remove compatibility shims. All hub control flows must call the daemon HTTP API directly via `_call_daemon_api(...)` in `app/cli.py`.
- - Edit `app/cli.py` to add `_call_daemon_api(...)` helper and make CLI hub commands call the daemon HTTP API exclusively (status, start/stop model, reload, memory load/unload, watch polling).
- - Edit `app/cli.py` to add `_call_daemon_api(...)` helper and make CLI hub commands call the daemon HTTP API exclusively (status, start/stop model, reload, memory load/unload, watch polling).
-   - Note: the CLI intentionally fails fast if the daemon is unreachable and will suggest a local start command.
-     Recommended local start command for development/testing:
-     - `uvicorn app.hub.daemon:create_app --host 127.0.0.1 --port 8001`
+- Create `app/hub/daemon.py` implementing `HubSupervisor` and FastAPI endpoints: `GET /health`, `GET /hub/status`, `POST /hub/reload`, `POST /hub/shutdown`, `POST /hub/models/{name}/start`, `POST /hub/models/{name}/stop`, `POST /hub/models/{name}/load-model`, `POST /hub/models/{name}/unload-model`.
+- Replace `app/hub/service.py` usage: remove compatibility shims. All hub control flows must call the daemon HTTP API directly via `_call_daemon_api(...)` in `app/cli.py`.
+- Edit `app/cli.py` to add `_call_daemon_api(...)` helper and make CLI hub commands call the daemon HTTP API exclusively (status, start/stop model, reload, memory load/unload, watch polling).
+  - Note: the CLI intentionally fails fast if the daemon is unreachable and will suggest a local start command.
+    Recommended local start command for development/testing:
+    - `uvicorn app.hub.daemon:create_app --host 127.0.0.1 --port 8001`
  - Add `tests/test_hub_daemon_api.py` to exercise the new endpoints and update/remove tests that import internal hub runtime modules.
  - Update `docs/HANDOFFS.md` with a short paragraph describing the new single-daemon approach and the canonical API entrypoint.
 

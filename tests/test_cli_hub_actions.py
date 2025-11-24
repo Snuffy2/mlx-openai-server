@@ -94,8 +94,6 @@ def test_hub_stop_cli_requests_shutdown(
 
     stub = _StubServiceClient()
 
-    build_calls = {"count": 0}
-
     def _call_stub(
         _config: MLXHubConfig,
         method: str,
@@ -122,18 +120,13 @@ def test_hub_stop_cli_requests_shutdown(
             return {"message": "stopped"}
         raise RuntimeError(f"unexpected call {method} {path}")
 
-    # emulate a build call count for compatibility with prior tests
-    def _fake_build(_cfg: object) -> None:
-        build_calls["count"] += 1
-
     monkeypatch.setattr("app.cli._call_daemon_api", _call_stub)
-    monkeypatch.setattr("app.cli._build_service_client", _fake_build)
+    # Prior tests used an internal build hook; the CLI now uses the daemon API.
 
     runner = CliRunner()
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "stop"])
 
     assert result.exit_code == 0
-    assert build_calls["count"] == 1
     assert stub.reload_calls == 1, (
         f"reloads={stub.reload_calls} availability_checks={stub.is_available_calls}"
     )

@@ -125,16 +125,6 @@ def _load_hub_config_or_fail(config_path: str | None) -> MLXHubConfig:
         raise click.ClickException(str(exc)) from exc
 
 
-def _build_service_client(config: MLXHubConfig) -> Any:
-    """Placeholder kept for backward-compatible test monkeypatching.
-
-    The legacy `HubServiceClient` was removed; callers should use the
-    hub daemon HTTP API via `_call_daemon_api` or the CLI helpers.
-    This function exists to allow tests to monkeypatch it when needed.
-    """
-    raise RuntimeError("Hub service client has been removed; use daemon HTTP API instead")
-
-
 def _controller_base_url(config: MLXHubConfig) -> str:
     """Return the base HTTP URL for the hub daemon from the config.
 
@@ -372,7 +362,7 @@ def _reload_or_fail(config: MLXHubConfig, *, header: str) -> dict[str, Any]:
     return diff
 
 
-def _require_service_client(config: MLXHubConfig) -> Any:
+def _require_service_client(config: MLXHubConfig) -> bool:
     """Build and validate a hub service client.
 
     Parameters

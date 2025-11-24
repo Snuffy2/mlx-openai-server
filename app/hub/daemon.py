@@ -221,15 +221,20 @@ class HubSupervisor:
         stopped = list(old_names - new_names)
         unchanged = list(old_names & new_names)
 
-        # Rebuild records for new config (conservative)
-        self.hub_config = new_hub
-        self._models = {}
-        for model in getattr(new_hub, "models", []):
-            name = getattr(model, "name", None) or str(model)
-            record = ModelRecord(name=name, config=model, port=getattr(model, "port", None))
-            self._models[name] = record
+        # Rebuild records for new config (do actual mutation under lock to
+        # prevent races with start/stop/watch/shutdown operations).
+        models_list = list(getattr(new_hub, "models", []))
 
-        logger.info(f"Reloaded hub config: started={started} stopped={stopped}")
+        async with self._lock:
+            self.hub_config = new_hub
+            self._models = {}
+            for model in models_list:
+                name = getattr(model, "name", None) or str(model)
+                record = ModelRecord(name=name, config=model, port=getattr(model, "port", None))
+                self._models[name] = record
+
+            logger.info(f"Reloaded hub config: started={started} stopped={stopped}")
+
         return {"started": started, "stopped": stopped, "unchanged": unchanged}
 
     def get_status(self) -> dict[str, Any]:
@@ -350,21 +355,15 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
 
     @app.post("/hub/models/{name}/load-model")
     async def model_load(name: str, request: Request) -> dict[str, Any]:
-        payload = (
-            await request.json()
-            if request.headers.get("content-type") == "application/json"
-            else {}
-        )
+        ctype = (request.headers.get("content-type") or "").lower()
+        payload = await request.json() if ctype.startswith("application/json") else {}
         reason = payload.get("reason", "cli") if isinstance(payload, dict) else "cli"
         return await supervisor.load_model_memory(name, reason)
 
     @app.post("/hub/models/{name}/unload-model")
     async def model_unload(name: str, request: Request) -> dict[str, Any]:
-        payload = (
-            await request.json()
-            if request.headers.get("content-type") == "application/json"
-            else {}
-        )
+        ctype = (request.headers.get("content-type") or "").lower()
+        payload = await request.json() if ctype.startswith("application/json") else {}
         reason = payload.get("reason", "cli") if isinstance(payload, dict) else "cli"
         return await supervisor.unload_model_memory(name, reason)
 
