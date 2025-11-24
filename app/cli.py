@@ -106,6 +106,23 @@ def cli() -> None:
 
 
 def _load_hub_config_or_fail(config_path: str | None) -> MLXHubConfig:
+    """Load hub configuration or exit with a CLI error.
+
+    Parameters
+    ----------
+    config_path : str or None
+        Path to the hub config file.
+
+    Returns
+    -------
+    MLXHubConfig
+        Loaded hub configuration.
+
+    Raises
+    ------
+    click.ClickException
+        If the configuration cannot be loaded.
+    """
     try:
         return load_hub_config(config_path)
     except HubConfigError as exc:  # pragma: no cover - CLI friendly errors
@@ -113,6 +130,18 @@ def _load_hub_config_or_fail(config_path: str | None) -> MLXHubConfig:
 
 
 def _build_service_client(config: MLXHubConfig) -> HubServiceClient:
+    """Build a hub service client for the given configuration.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+
+    Returns
+    -------
+    HubServiceClient
+        Configured service client.
+    """
     paths = get_service_paths(config)
     return HubServiceClient(paths.socket_path)
 
@@ -123,6 +152,17 @@ def _print_hub_status(
     model_names: Iterable[str] | None = None,
     live_status: dict[str, Any] | None = None,
 ) -> None:
+    """Print hub status information to the console.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+    model_names : Iterable[str] | None, optional
+        Specific model names to display. If None, all models are shown.
+    live_status : dict[str, Any] | None, optional
+        Live status data from the hub service. If provided, includes runtime state.
+    """
     click.echo(f"Hub log path: {config.log_path}")
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
 
@@ -171,13 +211,33 @@ _FLASH_STYLES: dict[str, tuple[str, str]] = {
 
 
 def _flash(message: str, tone: Literal["info", "success", "warning", "error"] = "info") -> None:
-    """Emit a short, colorized status line for CLI actions."""
+    """Emit a short, colorized status line for CLI actions.
+
+    Parameters
+    ----------
+    message : str
+        The message to display.
+    tone : Literal["info", "success", "warning", "error"], optional
+        The tone of the message, defaults to "info".
+    """
 
     prefix, color = _FLASH_STYLES.get(tone, _FLASH_STYLES["info"])
     click.echo(click.style(f"{prefix} {message}", fg=color))
 
 
 def _format_name_list(values: Iterable[str] | None) -> str:
+    """Format a list of names into a comma-separated string.
+
+    Parameters
+    ----------
+    values : Iterable[str] | None
+        The list of names to format.
+
+    Returns
+    -------
+    str
+        Comma-separated string of names, or "none" if empty.
+    """
     if not values:
         return "none"
     filtered = [value for value in values if value]
@@ -185,6 +245,15 @@ def _format_name_list(values: Iterable[str] | None) -> str:
 
 
 def _emit_reload_summary(diff: dict[str, Any], *, header: str) -> None:
+    """Emit a summary of reload changes to the console.
+
+    Parameters
+    ----------
+    diff : dict[str, Any]
+        The reload diff containing started, stopped, and unchanged models.
+    header : str
+        The header message for the summary.
+    """
     started = _format_name_list(diff.get("started"))
     stopped = _format_name_list(diff.get("stopped"))
     unchanged = _format_name_list(diff.get("unchanged"))
@@ -195,6 +264,25 @@ def _emit_reload_summary(diff: dict[str, Any], *, header: str) -> None:
 
 
 def _reload_or_fail(client: HubServiceClient, *, header: str) -> dict[str, Any]:
+    """Reload the hub service and emit a summary, or fail with an exception.
+
+    Parameters
+    ----------
+    client : HubServiceClient
+        The hub service client.
+    header : str
+        The header message for the reload summary.
+
+    Returns
+    -------
+    dict[str, Any]
+        The reload diff.
+
+    Raises
+    ------
+    click.ClickException
+        If the reload operation fails.
+    """
     try:
         diff = client.reload()
     except HubServiceError as exc:
@@ -204,6 +292,23 @@ def _reload_or_fail(client: HubServiceClient, *, header: str) -> dict[str, Any]:
 
 
 def _require_service_client(config: MLXHubConfig) -> HubServiceClient:
+    """Build and validate a hub service client.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+
+    Returns
+    -------
+    HubServiceClient
+        The validated service client.
+
+    Raises
+    ------
+    click.ClickException
+        If the hub manager is not running.
+    """
     client = _build_service_client(config)
     if not client.is_available():
         raise click.ClickException(
@@ -213,6 +318,18 @@ def _require_service_client(config: MLXHubConfig) -> HubServiceClient:
 
 
 def _resolve_controller_base_url(config: MLXHubConfig) -> str:
+    """Resolve the base URL for the hub controller.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+
+    Returns
+    -------
+    str
+        The base URL for the controller.
+    """
     host = (config.host or "127.0.0.1").strip()
     if host in {"0.0.0.0", "::", "[::]"}:
         host = "127.0.0.1"
@@ -231,6 +348,24 @@ def _perform_memory_action_request(
     *,
     reason: str,
 ) -> tuple[bool, str]:
+    """Perform a memory action request to the hub controller.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+    model_name : str
+        The name of the model.
+    action : Literal["load-model", "unload-model"]
+        The action to perform.
+    reason : str
+        The reason for the action.
+
+    Returns
+    -------
+    tuple[bool, str]
+        Success flag and message.
+    """
     base_url = _resolve_controller_base_url(config)
     url = f"{base_url}/hub/models/{quote(model_name, safe='')}/{action}"
     try:
@@ -259,6 +394,24 @@ def _run_memory_actions(
     *,
     reason: str,
 ) -> None:
+    """Run memory actions for multiple models.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+    model_names : Iterable[str]
+        The names of the models.
+    action : Literal["load-model", "unload-model"]
+        The action to perform.
+    reason : str
+        The reason for the action.
+
+    Raises
+    ------
+    click.ClickException
+        If any memory action fails.
+    """
     had_error = False
     for raw_name in model_names:
         target = raw_name.strip()
@@ -278,6 +431,20 @@ def _run_memory_actions(
 
 
 def _wait_for_controller_available(config: MLXHubConfig, timeout: float = 20.0) -> bool:
+    """Wait for the hub controller to become available.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+    timeout : float, optional
+        Maximum time to wait in seconds, defaults to 20.0.
+
+    Returns
+    -------
+    bool
+        True if the controller became available, False otherwise.
+    """
     base_url = _resolve_controller_base_url(config)
     deadline = time.time() + timeout
     last_error: str | None = None
@@ -295,6 +462,18 @@ def _wait_for_controller_available(config: MLXHubConfig, timeout: float = 20.0) 
 
 
 def _start_controller_if_needed(config: MLXHubConfig) -> None:
+    """Start the hub controller if it's not already running.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+
+    Raises
+    ------
+    click.ClickException
+        If the configuration is not saved or the controller fails to start.
+    """
     if is_hub_controller_running(config):
         _flash("Hub controller already running", tone="warning")
         return
@@ -312,6 +491,13 @@ def _start_controller_if_needed(config: MLXHubConfig) -> None:
 
 
 def _stop_controller_if_running(config: MLXHubConfig) -> None:
+    """Stop the hub controller if it's running.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+    """
     if stop_hub_controller_process(config):
         _flash("Hub controller shutdown requested", tone="success")
     else:
@@ -319,7 +505,18 @@ def _stop_controller_if_running(config: MLXHubConfig) -> None:
 
 
 def _format_duration(seconds: float | None) -> str:
-    """Return a compact human-readable duration string."""
+    """Return a compact human-readable duration string.
+
+    Parameters
+    ----------
+    seconds : float | None
+        The duration in seconds.
+
+    Returns
+    -------
+    str
+        Formatted duration string.
+    """
 
     if seconds is None or seconds < 0:
         return "-"
@@ -334,7 +531,20 @@ def _format_duration(seconds: float | None) -> str:
 
 
 def _render_watch_table(models: Iterable[dict[str, Any]], *, now: float | None = None) -> str:
-    """Return a formatted table describing hub-managed processes."""
+    """Return a formatted table describing hub-managed processes.
+
+    Parameters
+    ----------
+    models : Iterable[dict[str, Any]]
+        The model process data.
+    now : float | None, optional
+        Reference time for uptime calculation, defaults to current time.
+
+    Returns
+    -------
+    str
+        Formatted table string.
+    """
 
     snapshot = list(models)
     if not snapshot:
@@ -383,6 +593,13 @@ def _render_watch_table(models: Iterable[dict[str, Any]], *, now: float | None =
 
 
 def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
+    """Print a formatted snapshot of hub-managed processes.
+
+    Parameters
+    ----------
+    snapshot : dict[str, Any]
+        The snapshot data containing models and timestamp.
+    """
     timestamp = snapshot.get("timestamp")
     reference = timestamp if isinstance(timestamp, (int, float)) else time.time()
     formatted = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(reference))

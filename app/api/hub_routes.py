@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+import importlib
 from pathlib import Path
 import time
 from typing import Any, Literal, cast
@@ -693,6 +694,23 @@ def _resolve_hub_config_path(raw_request: Request) -> Path:
     return DEFAULT_HUB_CONFIG_PATH
 
 
+def _stop_controller_process(config: MLXHubConfig) -> bool:
+    """Stop the hub controller using a late import to avoid cycles.
+
+    Parameters
+    ----------
+    config : MLXHubConfig
+        The hub configuration.
+
+    Returns
+    -------
+    bool
+        True if the controller was stopped, False otherwise.
+    """
+    hub_server = importlib.import_module("app.hub.server")
+    return bool(hub_server.stop_hub_controller_process(config))
+
+
 def _load_hub_config_from_request(raw_request: Request) -> MLXHubConfig:
     """Load hub configuration from the resolved config path.
 
@@ -795,8 +813,13 @@ def _manager_unavailable_response() -> JSONResponse:
 
 
 def _controller_unavailable_response() -> JSONResponse:
-    """Return a standardized response when the hub controller is missing."""
+    """Return a standardized response when the hub controller is missing.
 
+    Returns
+    -------
+    JSONResponse
+        Error response indicating controller unavailability.
+    """
     return JSONResponse(
         content=create_error_response(
             "Hub controller is not available. Ensure the hub server is running before issuing memory actions.",
@@ -808,8 +831,18 @@ def _controller_unavailable_response() -> JSONResponse:
 
 
 def _controller_error_response(exc: HubControllerError) -> JSONResponse:
-    """Convert a HubControllerError into a JSON API response."""
+    """Convert a HubControllerError into a JSON API response.
 
+    Parameters
+    ----------
+    exc : HubControllerError
+        The controller error to convert.
+
+    Returns
+    -------
+    JSONResponse
+        JSON error response.
+    """
     status = exc.status_code or HTTPStatus.SERVICE_UNAVAILABLE
     error_type = "invalid_request_error"
     if status == HTTPStatus.TOO_MANY_REQUESTS:
@@ -842,8 +875,18 @@ def _ensure_manager_available(client: HubServiceClient) -> bool:
 
 
 def _normalize_model_name(model_name: str) -> str:
-    """Sanitize a model target provided via the API."""
+    """Sanitize a model target provided via the API.
 
+    Parameters
+    ----------
+    model_name : str
+        The model name to normalize.
+
+    Returns
+    -------
+    str
+        The normalized model name.
+    """
     return model_name.strip()
 
 
@@ -1176,8 +1219,23 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
 
 @hub_router.get("/hub", response_class=HTMLResponse)
 async def hub_status_page(raw_request: Request) -> HTMLResponse:
-    """Serve a lightweight HTML dashboard for hub operators."""
+    """Serve a lightweight HTML dashboard for hub operators.
 
+    Parameters
+    ----------
+    raw_request : Request
+        The incoming FastAPI request.
+
+    Returns
+    -------
+    HTMLResponse
+        HTML response with the dashboard.
+
+    Raises
+    ------
+    HTTPException
+        If the status page is disabled.
+    """
     config = getattr(raw_request.app.state, "server_config", None)
     enabled = bool(getattr(config, "enable_status_page", False))
     if not enabled:
@@ -1193,12 +1251,21 @@ async def hub_status_page(raw_request: Request) -> HTMLResponse:
 async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
     """Start the background hub manager service if it is not already running.
 
+    Parameters
+    ----------
+    raw_request : Request
+        The incoming FastAPI request.
+
     Returns
     -------
     HubServiceActionResponse or JSONResponse
         Response indicating the result of the start action.
-    """
 
+    Raises
+    ------
+    HubConfigError
+        If the hub configuration cannot be loaded.
+    """
     try:
         config = _load_hub_config_from_request(raw_request)
     except HubConfigError as exc:
@@ -1246,37 +1313,60 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
 
 @hub_router.post("/hub/service/stop", response_model=HubServiceActionResponse)
 async def hub_service_stop(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
-    """Stop the background hub manager service if it is running.
+    """Stop the hub controller and manager service when present.
+
+    Parameters
+    ----------
+    raw_request : Request
+        The incoming FastAPI request.
 
     Returns
     -------
-    HubServiceActionResponse or JSONResponse
-        Response indicating the result of the stop action.
-    """
+    HubServiceActionResponse | JSONResponse
+        Response indicating the result of the stop operation.
 
+    Raises
+    ------
+    HubConfigError
+        If the hub configuration cannot be loaded.
+    HubServiceError
+        If there is an error communicating with the hub service.
+    """
     try:
         config = _load_hub_config_from_request(raw_request)
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
 
+    controller_stopped = _stop_controller_process(config)
     client = _build_service_client(config)
-    if not _ensure_manager_available(client):
-        return _manager_unavailable_response()
+    manager_shutdown = False
 
-    try:
-        client.reload()
-    except HubServiceError as exc:
-        return _service_error_response("reload before shutdown", exc)
+    if _ensure_manager_available(client):
+        try:
+            client.reload()
+        except HubServiceError as exc:
+            return _service_error_response("reload before shutdown", exc)
 
-    try:
-        client.shutdown()
-    except HubServiceError as exc:
-        return _service_error_response("stop the hub manager", exc)
+        try:
+            client.shutdown()
+        except HubServiceError as exc:
+            return _service_error_response("stop the hub manager", exc)
+
+        manager_shutdown = True
+
+    message_parts = [
+        "Hub controller stop requested" if controller_stopped else "Hub controller was not running",
+        "Hub manager shutdown requested" if manager_shutdown else "Hub manager was not running",
+    ]
 
     return HubServiceActionResponse(
         status="ok",
         action="stop",
-        message="Hub manager shutdown requested",
+        message=". ".join(message_parts),
+        details={
+            "controller_stopped": controller_stopped,
+            "manager_shutdown": manager_shutdown,
+        },
     )
 
 
@@ -1284,12 +1374,23 @@ async def hub_service_stop(raw_request: Request) -> HubServiceActionResponse | J
 async def hub_service_reload(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
     """Reload hub.yaml inside the running manager service and return the diff.
 
+    Parameters
+    ----------
+    raw_request : Request
+        The incoming FastAPI request.
+
     Returns
     -------
     HubServiceActionResponse or JSONResponse
         Response indicating the result of the reload action.
-    """
 
+    Raises
+    ------
+    HubConfigError
+        If the hub configuration cannot be loaded.
+    HubServiceError
+        If there is an error communicating with the hub service.
+    """
     try:
         config = _load_hub_config_from_request(raw_request)
     except HubConfigError as exc:
@@ -1372,8 +1473,22 @@ async def hub_memory_load_model(
     raw_request: Request,
     payload: HubModelActionRequest | None = None,
 ) -> HubModelActionResponse | JSONResponse:
-    """Request that the in-process controller load ``model_name`` into memory."""
+    """Request that the in-process controller load ``model_name`` into memory.
 
+    Parameters
+    ----------
+    model_name : str
+        The name of the model to load.
+    raw_request : Request
+        The incoming FastAPI request.
+    payload : HubModelActionRequest, optional
+        Additional payload for the request.
+
+    Returns
+    -------
+    HubModelActionResponse or JSONResponse
+        Response indicating the result of the load action.
+    """
     return await _hub_memory_controller_action(raw_request, model_name, "load-model", payload)
 
 
@@ -1383,8 +1498,22 @@ async def hub_memory_unload_model(
     raw_request: Request,
     payload: HubModelActionRequest | None = None,
 ) -> HubModelActionResponse | JSONResponse:
-    """Request that the in-process controller unload ``model_name`` from memory."""
+    """Request that the in-process controller unload ``model_name`` from memory.
 
+    Parameters
+    ----------
+    model_name : str
+        The name of the model to unload.
+    raw_request : Request
+        The incoming FastAPI request.
+    payload : HubModelActionRequest, optional
+        Additional payload for the request.
+
+    Returns
+    -------
+    HubModelActionResponse or JSONResponse
+        Response indicating the result of the unload action.
+    """
     return await _hub_memory_controller_action(raw_request, model_name, "unload-model", payload)
 
 
@@ -1454,8 +1583,24 @@ async def _hub_memory_controller_action(
     action: Literal["load-model", "unload-model"],
     payload: HubModelActionRequest | None,
 ) -> HubModelActionResponse | JSONResponse:
-    """Execute a memory load/unload request using the in-process controller."""
+    """Execute a memory load/unload request using the in-process controller.
 
+    Parameters
+    ----------
+    raw_request : Request
+        The incoming FastAPI request.
+    model_name : str
+        The name of the model to act on.
+    action : Literal["load-model", "unload-model"]
+        The action to perform.
+    payload : HubModelActionRequest or None
+        Additional payload for the request.
+
+    Returns
+    -------
+    HubModelActionResponse or JSONResponse
+        Response indicating the result of the action.
+    """
     target = _normalize_model_name(model_name)
     if not target:
         return JSONResponse(

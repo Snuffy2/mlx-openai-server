@@ -18,6 +18,8 @@ from app.server import configure_fastapi_app
 
 
 class _StubServiceState:
+    """Stub state for testing hub service interactions."""
+
     def __init__(self) -> None:
         self.available = True
         self.reload_calls = 0
@@ -29,9 +31,12 @@ class _StubServiceState:
         self.start_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.shutdown_called = False
+        self.controller_stop_calls = 0
 
 
 class _StubServiceClient:
+    """Stub client for testing hub service interactions."""
+
     state: _StubServiceState
 
     def __init__(self, _socket_path: str, *, timeout: float = 5.0) -> None:  # noqa: ARG002
@@ -74,6 +79,8 @@ class _StubServiceClient:
 
 
 class _StubController:
+    """Stub controller for testing hub controller interactions."""
+
     def __init__(self) -> None:
         self.loaded: list[tuple[str, str]] = []
         self.unloaded: list[tuple[str, str]] = []
@@ -140,6 +147,12 @@ models:
         return 4321
 
     monkeypatch.setattr("app.api.hub_routes.start_hub_service_process", _fake_start_process)
+
+    def _fake_stop_controller(_config: Any) -> bool:  # noqa: ANN401
+        state.controller_stop_calls += 1
+        return True
+
+    monkeypatch.setattr("app.api.hub_routes._stop_controller_process", _fake_stop_controller)
 
     client = TestClient(app)
     try:
@@ -223,18 +236,51 @@ def test_hub_service_start_spawns_process_when_missing(
     assert body["details"]["pid"] == 4321
 
 
-def test_hub_service_stop_requires_running_manager(
+def test_hub_service_stop_handles_missing_manager(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
-    """Stopping the service should fail cleanly when it is not running."""
+    """Stop should still return success when the manager is offline.
+
+    Parameters
+    ----------
+    hub_service_app : tuple[TestClient, _StubServiceState, _StubController]
+        Fixture providing the test client and stubs.
+    """
 
     client, state, _controller = hub_service_app
     state.available = False
 
     response = client.post("/hub/service/stop")
 
-    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.status_code == HTTPStatus.OK
     assert state.shutdown_called is False
+    assert state.controller_stop_calls == 1
+    payload = response.json()
+    assert payload["details"] == {"controller_stopped": True, "manager_shutdown": False}
+
+
+def test_hub_service_stop_shuts_down_manager_when_available(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
+) -> None:
+    """Stop should mirror CLI behavior by halting controller and manager.
+
+    Parameters
+    ----------
+    hub_service_app : tuple[TestClient, _StubServiceState, _StubController]
+        Fixture providing the test client and stubs.
+    """
+
+    client, state, _controller = hub_service_app
+    state.available = True
+
+    response = client.post("/hub/service/stop")
+
+    assert response.status_code == HTTPStatus.OK
+    assert state.shutdown_called is True
+    assert state.reload_calls == 1
+    assert state.controller_stop_calls == 1
+    payload = response.json()
+    assert payload["details"] == {"controller_stopped": True, "manager_shutdown": True}
 
 
 def test_hub_service_reload_endpoint_returns_diff(
