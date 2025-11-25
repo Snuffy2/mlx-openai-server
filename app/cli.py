@@ -395,8 +395,6 @@ def _perform_memory_action_request(
     config: MLXHubConfig,
     model_name: str,
     action: Literal["load-model", "unload-model"],
-    *,
-    reason: str,
 ) -> tuple[bool, str]:
     """Perform a memory action request to the hub controller.
 
@@ -408,8 +406,6 @@ def _perform_memory_action_request(
         The name of the model.
     action : Literal["load-model", "unload-model"]
         The action to perform.
-    reason : str
-        The reason for the action.
 
     Returns
     -------
@@ -421,7 +417,6 @@ def _perform_memory_action_request(
             config,
             "POST",
             f"/hub/models/{quote(model_name, safe='')}/{action}",
-            json={"reason": reason},
             timeout=10.0,
         )
     except click.ClickException as exc:
@@ -438,8 +433,6 @@ def _run_memory_actions(
     config: MLXHubConfig,
     model_names: Iterable[str],
     action: Literal["load-model", "unload-model"],
-    *,
-    reason: str,
 ) -> None:
     """Run memory actions for multiple models.
 
@@ -451,8 +444,6 @@ def _run_memory_actions(
         The names of the models.
     action : Literal["load-model", "unload-model"]
         The action to perform.
-    reason : str
-        The reason for the action.
 
     Raises
     ------
@@ -466,7 +457,7 @@ def _run_memory_actions(
             had_error = True
             _flash("Skipping blank model name entry", tone="warning")
             continue
-        ok, message = _perform_memory_action_request(config, target, action, reason=reason)
+        ok, message = _perform_memory_action_request(config, target, action)
         verb = "load" if action.startswith("load") else "unload"
         if ok:
             _flash(f"{target}: memory {verb} requested ({message})", tone="success")
@@ -996,34 +987,22 @@ def hub_stop_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 
 @hub.command(name="load-model", help="Load handlers for one or more models into memory")
 @click.argument("model_names", nargs=-1, required=True)
-@click.option(
-    "--reason",
-    default="cli",
-    show_default=True,
-    help="Reason string recorded alongside the controller action.",
-)
 @click.pass_context
-def hub_memory_load(ctx: click.Context, model_names: tuple[str, ...], reason: str) -> None:
+def hub_memory_load(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger controller-backed memory loads for the provided models."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
-    _run_memory_actions(config, model_names, "load-model", reason=reason)
+    _run_memory_actions(config, model_names, "load-model")
 
 
 @hub.command(name="unload-model", help="Unload handlers for one or more models from memory")
 @click.argument("model_names", nargs=-1, required=True)
-@click.option(
-    "--reason",
-    default="cli",
-    show_default=True,
-    help="Reason string recorded alongside the controller action.",
-)
 @click.pass_context
-def hub_memory_unload(ctx: click.Context, model_names: tuple[str, ...], reason: str) -> None:
+def hub_memory_unload(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger controller-backed memory unloads for the provided models."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
-    _run_memory_actions(config, model_names, "unload-model", reason=reason)
+    _run_memory_actions(config, model_names, "unload-model")
 
 
 @hub.command(name="watch", help="Continuously print live hub manager status")

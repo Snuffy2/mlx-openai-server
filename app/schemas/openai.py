@@ -490,11 +490,6 @@ class HubStatusResponse(OpenAIBaseModel):
 class HubModelActionRequest(OpenAIBaseModel):
     """Request payload for hub model lifecycle actions."""
 
-    reason: str | None = Field(
-        None,
-        description="Optional human-readable reason recorded in controller logs.",
-    )
-
 
 class HubModelActionResponse(OpenAIBaseModel):
     """Response payload emitted after hub model actions."""

@@ -80,16 +80,16 @@ class _StubController:
     """Stub controller for testing hub controller interactions."""
 
     def __init__(self) -> None:
-        self.loaded: list[tuple[str, str]] = []
-        self.unloaded: list[tuple[str, str]] = []
+        self.loaded: list[str] = []
+        self.unloaded: list[str] = []
 
-    async def load_model(self, name: str, *, reason: str = "manual") -> None:
-        self.loaded.append((name, reason))
+    async def load_model(self, name: str) -> None:
+        self.loaded.append(name)
         if name == "denied":
             raise HTTPException(status_code=HTTPStatus.TOO_MANY_REQUESTS, detail="group busy")
 
-    async def unload_model(self, name: str, *, reason: str = "manual") -> None:
-        self.unloaded.append((name, reason))
+    async def unload_model(self, name: str) -> None:
+        self.unloaded.append(name)
         if name == "missing":
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="not loaded")
 
@@ -348,7 +348,7 @@ def test_hub_memory_load_invokes_controller(
     response = client.post("/hub/models/alpha/load-model", json={"reason": "dashboard"})
 
     assert response.status_code == HTTPStatus.OK
-    assert controller.loaded == [("alpha", "dashboard")]
+    assert controller.loaded == ["alpha"]
 
 
 def test_hub_memory_actions_surface_controller_errors(
@@ -365,4 +365,4 @@ def test_hub_memory_actions_surface_controller_errors(
 
     response = client.post("/hub/models/missing/unload-model", json={})
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert controller.unloaded[-1] == ("missing", "manual")
+    assert controller.unloaded[-1] == "missing"

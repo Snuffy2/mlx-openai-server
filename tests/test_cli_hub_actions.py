@@ -258,12 +258,10 @@ def test_hub_memory_load_cli_calls_controller(
 ) -> None:
     """`hub load-model` should delegate to the controller helper."""
 
-    captured: list[tuple[tuple[str, ...], str, str]] = []
+    captured: list[tuple[tuple[str, ...], str]] = []
 
-    def _fake_run_actions(
-        _config: object, names: tuple[str, ...], action: str, *, reason: str
-    ) -> None:
-        captured.append((names, action, reason))
+    def _fake_run_actions(_config: object, names: tuple[str, ...], action: str) -> None:
+        captured.append((names, action))
 
     monkeypatch.setattr("app.cli._run_memory_actions", _fake_run_actions)
 
@@ -277,13 +275,11 @@ def test_hub_memory_load_cli_calls_controller(
             "load-model",
             "alpha",
             "beta",
-            "--reason",
-            "dashboard",
         ],
     )
 
     assert result.exit_code == 0
-    assert captured == [(("alpha", "beta"), "load-model", "dashboard")]
+    assert captured == [(("alpha", "beta"), "load-model")]
 
 
 def test_hub_memory_unload_cli_surfaces_errors(
@@ -291,17 +287,15 @@ def test_hub_memory_unload_cli_surfaces_errors(
 ) -> None:
     """`hub unload-model` should propagate helper failures as CLI errors."""
 
-    def _fake_run_actions(
-        _config: object, _names: tuple[str, ...], _action: str, *, reason: str
-    ) -> None:
-        raise click.ClickException(f"boom: {reason}")
+    def _fake_run_actions(_config: object, _names: tuple[str, ...], _action: str) -> None:
+        raise click.ClickException("boom: test")
 
     monkeypatch.setattr("app.cli._run_memory_actions", _fake_run_actions)
 
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["hub", "--config", str(hub_config_file), "unload-model", "alpha", "--reason", "test"],
+        ["hub", "--config", str(hub_config_file), "unload-model", "alpha"],
     )
 
     assert result.exit_code != 0

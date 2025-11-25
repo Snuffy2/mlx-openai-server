@@ -1737,13 +1737,12 @@ async def _hub_memory_controller_action(
     if controller is None:
         return _controller_unavailable_response()
 
-    reason = payload.reason if payload and payload.reason else "manual"
     try:
         if action == "load-model":
-            await controller.load_model(target, reason=reason)
+            await controller.load_model(target)
             message = f"Model '{target}' memory load requested"
         else:
-            await controller.unload_model(target, reason=reason)
+            await controller.unload_model(target)
             message = f"Model '{target}' memory unload requested"
     except Exception as exc:
         return _controller_error_response(exc)

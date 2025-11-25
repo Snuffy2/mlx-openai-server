@@ -182,7 +182,7 @@ class HubSupervisor:
         logger.info(f"Stopped model {name} exit_code={record.exit_code}")
         return {"status": "stopped", "name": name, "exit_code": record.exit_code}
 
-    async def load_model_memory(self, name: str, reason: str = "manual") -> dict[str, Any]:
+    async def load_model_memory(self, name: str) -> dict[str, Any]:
         """Mark a model's memory/runtime as loaded.
 
         This is a lightweight marker; heavy loading work should be scheduled
@@ -195,10 +195,10 @@ class HubSupervisor:
             record = self._models[name]
             # Mark loaded and schedule any heavy lifting as a background task
             record.memory_loaded = True
-            logger.info(f"Marked model {name} memory_loaded (reason={reason})")
+            logger.info(f"Marked model {name} memory_loaded")
             return {"status": "memory_loaded", "name": name}
 
-    async def unload_model_memory(self, name: str, reason: str = "manual") -> dict[str, Any]:
+    async def unload_model_memory(self, name: str) -> dict[str, Any]:
         """Mark a model's memory/runtime as unloaded.
 
         The supervisor will not attempt to free in-process handler state here;
@@ -210,7 +210,7 @@ class HubSupervisor:
                 raise HTTPException(status_code=404, detail="model not found")
             record = self._models[name]
             record.memory_loaded = False
-            logger.info(f"Marked model {name} memory_unloaded (reason={reason})")
+            logger.info(f"Marked model {name} memory_unloaded")
             return {"status": "memory_unloaded", "name": name}
 
     async def reload_config(self) -> dict[str, Any]:
@@ -375,17 +375,11 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     @app.post("/hub/models/{name}/load-model")
     async def model_load(name: str, request: Request) -> dict[str, Any]:
         supervisor = cast("HubSupervisor", request.app.state.supervisor)
-        ctype = (request.headers.get("content-type") or "").lower()
-        payload = await request.json() if ctype.startswith("application/json") else {}
-        reason = payload.get("reason", "cli") if isinstance(payload, dict) else "cli"
-        return await supervisor.load_model_memory(name, reason)
+        return await supervisor.load_model_memory(name)
 
     @app.post("/hub/models/{name}/unload-model")
     async def model_unload(name: str, request: Request) -> dict[str, Any]:
         supervisor = cast("HubSupervisor", request.app.state.supervisor)
-        ctype = (request.headers.get("content-type") or "").lower()
-        payload = await request.json() if ctype.startswith("application/json") else {}
-        reason = payload.get("reason", "cli") if isinstance(payload, dict) else "cli"
-        return await supervisor.unload_model_memory(name, reason)
+        return await supervisor.unload_model_memory(name)
 
     return app
