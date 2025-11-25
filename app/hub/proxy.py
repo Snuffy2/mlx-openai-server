@@ -13,9 +13,12 @@ Notes
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 import contextlib
 import json
 import time
+from typing import cast
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -167,48 +170,97 @@ async def proxy_v1(path: str, request: Request) -> StarletteResponse:
     if body_bytes is None:
         body_bytes = await request.body()
 
-    # Proxy the request and return the response (buffered to simplify tests).
+    # Proxy the request and stream the response back to the client.
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+    meta: dict[str, object] = {}
+
+    async def _pump_stream() -> None:
+        """Background task that opens the upstream stream and pushes chunks into a queue."""
+        try:
+            async with (
+                httpx.AsyncClient(timeout=60.0) as client,
+                client.stream(
+                    request.method, target_url, headers=headers, params=params, content=body_bytes
+                ) as resp,
+            ):
+                # Publish status and headers for the main coroutine to inspect
+                meta["status"] = resp.status_code
+                meta["headers"] = dict(resp.headers)
+                try:
+                    async for chunk in resp.aiter_bytes():
+                        # Push raw bytes into the queue for StreamingResponse
+                        await queue.put(chunk)
+                finally:
+                    # Signal end of stream
+                    await queue.put(None)
+        except Exception as exc:  # pragma: no cover - bubble up to main
+            meta["error"] = exc
+            # Ensure consumer does not block indefinitely
+            await queue.put(None)
+
+    pump_task = asyncio.create_task(_pump_stream())
+
+    # Wait (briefly) until status/headers are available or the pump reports an error
+    async def _wait_meta() -> None:
+        while True:
+            if "status" in meta or "error" in meta:
+                return
+            await asyncio.sleep(0.01)
+
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.request(
-                request.method, target_url, headers=headers, params=params, content=body_bytes
-            )
-            status = resp.status_code
-            response_headers = dict(resp.headers)
-            content_bytes = resp.content
-
-        # Filter hop-by-hop headers that should not be exposed
-        for h in [
-            "transfer-encoding",
-            "connection",
-            "keep-alive",
-            "proxy-authenticate",
-            "proxy-authorization",
-            "te",
-            "trailer",
-            "upgrade",
-        ]:
-            response_headers.pop(h, None)
-
-        # If the worker returned JSON, return JSONResponse to preserve structure
-        ctype = response_headers.get("content-type", "")
-        if "application/json" in ctype:
-            try:
-                payload = json.loads(content_bytes.decode("utf-8") or "{}")
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                return JSONResponse(content=payload, status_code=status, headers=response_headers)
-
-        # Fallback: return the raw bytes as a streaming response
-        return StreamingResponse(
-            iter([content_bytes]), status_code=status, headers=response_headers
-        )
-    except httpx.RequestError as exc:
-        logger.debug(f"Proxy request to {target_url} failed: {exc}")
+        await asyncio.wait_for(_wait_meta(), timeout=5.0)
+    except TimeoutError:
+        pump_task.cancel()
         return JSONResponse(
             content=create_error_response(
-                f"Failed to contact worker for model '{model}': {exc}", "service_unavailable", 503
+                f"Timed out waiting for worker response for model '{model}'",
+                "service_unavailable",
+                504,
+            ),
+            status_code=504,
+        )
+
+    if "error" in meta:
+        pump_task.cancel()
+        err = meta.get("error")
+        logger.debug(f"Proxy request to {target_url} failed during connect/stream: {err}")
+        return JSONResponse(
+            content=create_error_response(
+                f"Failed to contact worker for model '{model}': {err}", "service_unavailable", 503
             ),
             status_code=503,
         )
+
+    status = int(cast("int", meta.get("status", 502)))
+    response_headers = dict(cast("dict[str, str]", meta.get("headers", {}) or {}))
+
+    # Filter hop-by-hop headers that should not be exposed
+    for h in [
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "upgrade",
+    ]:
+        response_headers.pop(h, None)
+
+    ctype = response_headers.get("content-type", "")
+
+    async def _body_iter() -> AsyncIterator[bytes]:
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            # Ensure background task cleanup
+            with contextlib.suppress(Exception):
+                pump_task.cancel()
+
+    return StreamingResponse(
+        _body_iter(), status_code=status, headers=response_headers, media_type=ctype or None
+    )

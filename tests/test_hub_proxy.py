@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import threading
+import time
 from typing import Any
 
 from fastapi import FastAPI
@@ -118,7 +119,10 @@ def test_hub_page_and_v1_proxy(tmp_path: Path) -> None:
 
 
 class WorkerHandler(BaseHTTPRequestHandler):
+    """HTTP handler that echoes posted JSON bodies for test assertions."""
+
     def do_POST(self) -> None:
+        """Handle POST by echoing a JSON payload containing path and body."""
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length else b""
         resp = {
@@ -134,15 +138,18 @@ class WorkerHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def log_message(self, format: str, *args: object) -> None:
-        # Silence test output
+        """Suppress standard logging output during tests."""
         return
 
 
 class DaemonHandler(BaseHTTPRequestHandler):
+    """Fake hub daemon HTTP handler that reports worker ports in /hub/status."""
+
     # This will be set at runtime by the test harness
     worker_port = 0
 
     def do_GET(self) -> None:
+        """Respond to /hub/status requests with a JSON model listing."""
         if self.path.startswith("/hub/status"):
             payload = {
                 "timestamp": 0,
@@ -159,6 +166,7 @@ class DaemonHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
+        """Suppress standard logging output during tests."""
         return
 
 
@@ -169,6 +177,7 @@ def _serve_in_thread(server: ThreadingHTTPServer) -> threading.Thread:
 
 
 def test_proxy_forwards_to_worker(tmp_path: Path) -> None:
+    """Start a fake daemon+worker and verify `/v1/*` requests are proxied."""
     # Start fake worker HTTP server
     worker_server = ThreadingHTTPServer(("127.0.0.1", 0), WorkerHandler)
     worker_thread = _serve_in_thread(worker_server)
@@ -196,6 +205,73 @@ def test_proxy_forwards_to_worker(tmp_path: Path) -> None:
                 # The worker echoes the path and body — verify they match
                 assert "/v1/echo" in payload.get("path", "")
                 assert "hello" in payload.get("body", "")
+
+        finally:
+            daemon_server.shutdown()
+            daemon_server.server_close()
+            daemon_thread.join(timeout=1.0)
+    finally:
+        worker_server.shutdown()
+        worker_server.server_close()
+        worker_thread.join(timeout=1.0)
+
+
+def test_proxy_streams_chunked_worker(tmp_path: Path) -> None:
+    """Verify the proxy streams chunked/SSE-like responses from a worker."""
+
+    # Worker that streams several small chunks with brief delays
+    class StreamingWorkerHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            # Do not send Content-Length; use streaming
+            self.end_headers()
+            for i in range(5):
+                payload = f"data: chunk-{i}\n\n".encode()
+                try:
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                except Exception:
+                    break
+                time.sleep(0.01)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    # Start streaming worker server
+    worker_server = ThreadingHTTPServer(("127.0.0.1", 0), StreamingWorkerHandler)
+    worker_thread = _serve_in_thread(worker_server)
+    worker_port = worker_server.server_address[1]
+
+    try:
+        # Start fake daemon that reports the worker port
+        DaemonHandler.worker_port = worker_port
+        daemon_server = ThreadingHTTPServer(("127.0.0.1", 0), DaemonHandler)
+        daemon_thread = _serve_in_thread(daemon_server)
+        daemon_port = daemon_server.server_address[1]
+
+        try:
+            app = FastAPI()
+            app.state.hub_daemon_url = f"http://127.0.0.1:{daemon_port}"
+            app.include_router(proxy_router)
+
+            with TestClient(app) as client:
+                body = {"model": "testmodel", "input": "stream"}
+                # Use TestClient.stream to iterate response chunks as they arrive
+                with client.stream("POST", "/v1/stream", json=body) as resp:
+                    assert resp.status_code == 200
+                    seen = []
+                    # Collect a few chunks from the streaming response
+                    for text in resp.iter_text():
+                        if not text:
+                            continue
+                        seen.append(text)
+                        if len(seen) >= 5:
+                            break
+
+                    # Confirm we received the SSE-like chunks in order
+                    assert any("chunk-0" in s for s in seen)
+                    assert any("chunk-4" in s for s in seen)
 
         finally:
             daemon_server.shutdown()

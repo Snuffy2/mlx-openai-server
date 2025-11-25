@@ -13,10 +13,12 @@ from collections.abc import AsyncGenerator
 import contextlib
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import multiprocessing
 import os
 from pathlib import Path
 import sys
 import time
+import traceback
 from typing import Any, cast
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -66,7 +68,7 @@ class ModelRecord:
 
     name: str
     config: Any
-    process: asyncio.subprocess.Process | None = None
+    process: Any | None = None
     pid: int | None = None
     port: int | None = None
     started_at: float | None = None
@@ -76,6 +78,45 @@ class ModelRecord:
     group: str | None = None
     is_default: bool = False
     model_path: str | None = None
+
+
+def _worker_process_main(params: dict[str, Any]) -> None:
+    """Entrypoint for worker processes started via multiprocessing.
+
+    This function is deliberately module-level so it can be used as the
+    target for `multiprocessing.Process`. It constructs an
+    `MLXServerConfig` from the provided params and runs
+    `asyncio.run(start(cfg))` to start the ASGI server in the child.
+    """
+    try:
+        import asyncio as _asyncio  # noqa: PLC0415
+
+        from app.config import MLXServerConfig as _Cfg  # noqa: PLC0415
+        from app.main import start as _start  # noqa: PLC0415
+
+        cfg = _Cfg(**params)
+        _asyncio.run(_start(cfg))
+    except Exception:
+        # In a child process; log to stderr and exit non-zero so the
+        # supervisor can detect startup failures.
+        traceback.print_exc()
+        sys.exit(1)
+
+
+def _is_proc_running(proc: Any) -> bool:
+    """Return True when a subprocess-like or multiprocessing.Process is running."""
+    if proc is None:
+        return False
+    # multiprocessing.Process
+    if hasattr(proc, "is_alive"):
+        try:
+            return bool(proc.is_alive())
+        except Exception:
+            return False
+    # asyncio.subprocess.Process
+    if hasattr(proc, "returncode"):
+        return proc.returncode is None
+    return False
 
 
 class HubSupervisor:
@@ -120,52 +161,50 @@ class HubSupervisor:
                 raise HTTPException(status_code=404, detail="model not found")
             record = self._models[name]
 
-            if record.process is not None and record.process.returncode is None:
+            if record.process is not None and _is_proc_running(record.process):
                 return {"status": "already_running", "name": name, "pid": record.pid}
 
-            cmd = None
             cfg = record.config
-            # Construct a default invocation to spawn the single-model
-            # server for this model. The command uses the package CLI
-            # (`python -m app.main launch`) with model settings from the
-            # hub configuration.
-            # Build default invocation: `python -m app.main launch ...`
-            py = sys.executable
+            # Construct a Python invocation that calls `app.main.start`
+            # directly with a programmatically built `MLXServerConfig`.
+            # This avoids going through the Click CLI while still running
+            # the server in a separate process. We pass primitive values
+            # via the inline `-c` script so the child process can import
+            # the project modules and invoke `asyncio.run(start(cfg))`.
             model_path = getattr(cfg, "model_path", None) or getattr(cfg, "model", None)
             model_type = getattr(cfg, "model_type", None) or "lm"
             host = getattr(cfg, "host", "127.0.0.1")
             port = record.port or getattr(cfg, "port", None) or 0
-            cmd = [
-                py,
-                "-m",
-                "app.main",
-                "launch",
-                "--model-path",
-                str(model_path),
-                "--model-type",
-                str(model_type),
-                "--host",
-                str(host),
-                "--port",
-                str(int(port)),
-            ]
-            if bool(getattr(cfg, "jit_enabled", False)):
-                cmd.append("--jit")
-            if getattr(cfg, "auto_unload_minutes", None) is not None:
-                cmd.extend(["--auto-unload-minutes", str(getattr(cfg, "auto_unload_minutes"))])
+            jit_flag = bool(getattr(cfg, "jit_enabled", False))
+            auto_unload = getattr(cfg, "auto_unload_minutes", None)
 
-            # Spawn subprocess without blocking the event loop
-            proc = await asyncio.create_subprocess_exec(*cmd)
-            record.process = proc
-            record.pid = proc.pid
-            record.started_at = time.time()
-            record.exit_code = None
+            # Build a Python snippet that constructs MLXServerConfig and runs start()
+            # Use repr() for safe literal embedding.
+            params = {
+                "model_path": model_path,
+                "model_type": model_type,
+                "host": host,
+                "port": int(port),
+                "jit_enabled": bool(jit_flag),
+            }
+            if auto_unload is not None:
+                params["auto_unload_minutes"] = int(auto_unload)
+            # Optionally include a name if present on the hub model config
+            cfg_name = getattr(cfg, "name", None) or getattr(cfg, "model_name", None)
+            if cfg_name:
+                params["name"] = cfg_name
 
-            # schedule a watcher
-            task = asyncio.create_task(self._watch_process(name, proc))
-            self._bg_tasks.append(task)
+            # Prepare params for an in-process Python worker (no external exec)
+            params_to_pass: dict[str, Any] = dict(params)
 
-            # If a port is configured (non-zero), wait until the spawned
+            # Spawn a separate OS process using multiprocessing so the
+            # worker runs isolated from the daemon but without invoking an
+            # external executable. The target is a module-level function
+            # `_worker_process_main` which constructs the MLX config and
+            # calls `app.main.start` inside the child process.
+            proc = multiprocessing.Process(target=_worker_process_main, args=(params_to_pass,))
+            proc.start()
+
             # process is listening on host:port before returning. This makes
             # `hub start` and controller start operations synchronous from
             # the operator perspective: they only return once the worker
@@ -174,17 +213,26 @@ class HubSupervisor:
             async def _wait_for_listen(
                 host: str,
                 port: int,
-                proc: asyncio.subprocess.Process,
+                proc: Any,
                 timeout: float = 30.0,
                 interval: float = 0.2,
             ) -> None:
                 start = time.time()
                 while True:
                     # If process exited while we were waiting, abort
-                    if proc.returncode is not None:
+                    exited = False
+                    exit_code: int | None = None
+                    if hasattr(proc, "returncode"):
+                        exited = proc.returncode is not None
+                        exit_code = proc.returncode
+                    elif hasattr(proc, "exitcode"):
+                        exited = proc.exitcode is not None
+                        exit_code = proc.exitcode
+
+                    if exited:
                         raise HTTPException(
                             status_code=500,
-                            detail=f"process exited before listening (exit_code={proc.returncode})",
+                            detail=f"process exited before listening (exit_code={exit_code})",
                         )
                     try:
                         reader, writer = await asyncio.open_connection(host, port)
@@ -246,21 +294,38 @@ class HubSupervisor:
                 raise HTTPException(status_code=404, detail="model not found")
             record = self._models[name]
             proc = record.process
-            if proc is None or proc.returncode is not None:
+            if proc is None or not _is_proc_running(proc):
                 return {"status": "not_running", "name": name}
 
-            with contextlib.suppress(ProcessLookupError):
+            with contextlib.suppress(Exception):
                 proc.terminate()
 
-        # Wait outside the lock
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=10.0)
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            await proc.wait()
+        # Wait outside the lock: poll until the process exits or timeout
+        timeout = 10.0
+        start = time.time()
+        while _is_proc_running(proc) and (time.time() - start) < timeout:
+            await asyncio.sleep(0.2)
 
-        record.exit_code = proc.returncode
+        if _is_proc_running(proc):
+            # Last resort: try to kill
+            with contextlib.suppress(Exception):
+                if hasattr(proc, "kill"):
+                    proc.kill()
+                else:
+                    proc.terminate()
+
+            # brief grace period
+            start2 = time.time()
+            while _is_proc_running(proc) and (time.time() - start2) < 5.0:
+                await asyncio.sleep(0.2)
+
+        exit_code = None
+        if hasattr(proc, "returncode"):
+            exit_code = proc.returncode
+        elif hasattr(proc, "exitcode"):
+            exit_code = proc.exitcode
+
+        record.exit_code = exit_code
         record.process = None
         record.pid = None
         logger.info(f"Stopped model {name} exit_code={record.exit_code}")
@@ -348,7 +413,7 @@ class HubSupervisor:
             "models": [],
         }
         for name, rec in self._models.items():
-            state = "running" if rec.process and rec.process.returncode is None else "stopped"
+            state = "running" if rec.process and _is_proc_running(rec.process) else "stopped"
             snapshot["models"].append(
                 {
                     "name": name,
@@ -366,16 +431,23 @@ class HubSupervisor:
             )
         return snapshot
 
-    async def _watch_process(self, name: str, proc: asyncio.subprocess.Process) -> None:
+    async def _watch_process(self, name: str, proc: Any) -> None:
         try:
-            await proc.wait()
+            # Poll until the process exits
+            while _is_proc_running(proc):
+                await asyncio.sleep(0.5)
             async with self._lock:
                 rec = self._models.get(name)
                 if rec is not None:
-                    rec.exit_code = proc.returncode
+                    exit_code = None
+                    if hasattr(proc, "returncode"):
+                        exit_code = proc.returncode
+                    elif hasattr(proc, "exitcode"):
+                        exit_code = proc.exitcode
+                    rec.exit_code = exit_code
                     rec.process = None
                     rec.pid = None
-                    logger.info(f"Model process exited: {name} code={proc.returncode}")
+                    logger.info(f"Model process exited: {name} code={exit_code}")
         except asyncio.CancelledError:
             logger.debug(f"Watcher cancelled for {name}")
 
