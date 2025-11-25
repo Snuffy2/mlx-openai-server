@@ -21,7 +21,7 @@ class _StubServiceState:
     def __init__(self) -> None:
         self.available = True
         self.reload_calls = 0
-        self.reload_result = {"started": [], "stopped": [], "unchanged": []}
+        self.reload_result: dict[str, list[str]] = {"started": [], "stopped": [], "unchanged": []}
         self.status_payload: dict[str, Any] = {
             "models": [],
             "timestamp": 1,
@@ -179,7 +179,7 @@ models:
 
     monkeypatch.setattr("app.api.hub_routes._call_daemon_api_async", _stub_call)
 
-    def _fake_start_process(path: str) -> int:  # noqa: ARG001
+    def _fake_start_process(path: str, *, host: str | None = None, port: int | None = None) -> int:  # noqa: ARG001
         state.available = True
         return 4321
 

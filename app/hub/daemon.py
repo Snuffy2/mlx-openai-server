@@ -9,15 +9,22 @@ may mock the supervisor where appropriate.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 import contextlib
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import time
-from typing import Any
+from typing import Any, cast
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from loguru import logger
 
 from .config import MLXHubConfig, load_hub_config
+
+
+def create_app_with_config(config_path: str) -> FastAPI:
+    """Create FastAPI app with specific config path (for uvicorn factory)."""
+    return create_app(config_path)
 
 
 @dataclass
@@ -78,7 +85,7 @@ class HubSupervisor:
         self.hub_config = hub_config
         self._models: dict[str, ModelRecord] = {}
         self._lock = asyncio.Lock()
-        self._bg_tasks: list[asyncio.Task] = []
+        self._bg_tasks: list[asyncio.Task[None]] = []
         self._shutdown = False
 
         # Populate model records from hub_config (best-effort)
@@ -230,7 +237,15 @@ class HubSupervisor:
             self._models = {}
             for model in models_list:
                 name = getattr(model, "name", None) or str(model)
-                record = ModelRecord(name=name, config=model, port=getattr(model, "port", None))
+                record = ModelRecord(
+                    name=name,
+                    config=model,
+                    port=getattr(model, "port", None),
+                    group=getattr(model, "group", None),
+                    is_default=getattr(model, "is_default_model", False),
+                    model_path=getattr(model, "model_path", None),
+                    auto_unload_minutes=getattr(model, "auto_unload_minutes", None),
+                )
                 self._models[name] = record
 
             logger.info(f"Reloaded hub config: started={started} stopped={stopped}")
@@ -244,7 +259,7 @@ class HubSupervisor:
         each model object contains keys used by the CLI and status UI.
         """
 
-        snapshot = {
+        snapshot: dict[str, Any] = {
             "timestamp": time.time(),
             "models": [],
         }
@@ -313,20 +328,21 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         `app.state.supervisor`.
     """
 
-    app = FastAPI(title="mlx hub daemon")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Startup
+        logger.info("Hub daemon starting up")
+        yield
+        # Shutdown
+        logger.info("Hub daemon shutting down")
+        await supervisor.shutdown_all()
+
+    app = FastAPI(title="mlx hub daemon", lifespan=lifespan)
 
     hub_config = load_hub_config(hub_config_path)
     supervisor = HubSupervisor(hub_config)
     app.state.supervisor = supervisor
-
-    @app.on_event("startup")
-    async def _startup() -> None:
-        logger.info("Hub daemon starting up")
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        logger.info("Hub daemon shutting down")
-        await supervisor.shutdown_all()
+    supervisor = cast("HubSupervisor", app.state.supervisor)  # Allow tests to override
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -341,20 +357,24 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         return await supervisor.reload_config()
 
     @app.post("/hub/shutdown")
-    async def hub_shutdown(background_tasks: BackgroundTasks) -> dict[str, str]:
+    async def hub_shutdown(background_tasks: BackgroundTasks, request: Request) -> dict[str, str]:
+        supervisor = cast("HubSupervisor", request.app.state.supervisor)
         background_tasks.add_task(supervisor.shutdown_all)
         return {"status": "shutdown_scheduled"}
 
     @app.post("/hub/models/{name}/start")
-    async def model_start(name: str) -> dict[str, Any]:
+    async def model_start(name: str, request: Request) -> dict[str, Any]:
+        supervisor = cast("HubSupervisor", request.app.state.supervisor)
         return await supervisor.start_model(name)
 
     @app.post("/hub/models/{name}/stop")
-    async def model_stop(name: str) -> dict[str, Any]:
+    async def model_stop(name: str, request: Request) -> dict[str, Any]:
+        supervisor = cast("HubSupervisor", request.app.state.supervisor)
         return await supervisor.stop_model(name)
 
     @app.post("/hub/models/{name}/load-model")
     async def model_load(name: str, request: Request) -> dict[str, Any]:
+        supervisor = cast("HubSupervisor", request.app.state.supervisor)
         ctype = (request.headers.get("content-type") or "").lower()
         payload = await request.json() if ctype.startswith("application/json") else {}
         reason = payload.get("reason", "cli") if isinstance(payload, dict) else "cli"
@@ -362,6 +382,7 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
 
     @app.post("/hub/models/{name}/unload-model")
     async def model_unload(name: str, request: Request) -> dict[str, Any]:
+        supervisor = cast("HubSupervisor", request.app.state.supervisor)
         ctype = (request.headers.get("content-type") or "").lower()
         payload = await request.json() if ctype.startswith("application/json") else {}
         reason = payload.get("reason", "cli") if isinstance(payload, dict) else "cli"

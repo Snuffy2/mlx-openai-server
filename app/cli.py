@@ -22,11 +22,6 @@ from loguru import logger
 from .config import MLXServerConfig
 from .handler.parser.factory import PARSER_REGISTRY
 from .hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
-from .hub.server import (
-    is_hub_controller_running,
-    start_hub_controller_process,
-    stop_hub_controller_process,
-)
 
 # Hub IPC service removed: CLI uses HTTP API to contact the hub daemon
 from .main import start
@@ -174,23 +169,30 @@ def _call_daemon_api(
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.request(method, url, json=json)
-    except Exception as exc:  # pragma: no cover - network error handling
+    except httpx.HTTPError as exc:  # pragma: no cover - network error handling
         raise click.ClickException(f"Failed to contact hub daemon at {base}: {exc}") from exc
 
     if resp.status_code >= 400:
         # Try to include JSON error message if present
         try:
-            payload = resp.json()
-        except Exception:
+            payload: object = resp.json()
+        except ValueError:
             payload = resp.text
         raise click.ClickException(f"Daemon responded {resp.status_code}: {payload}")
 
-    if resp.content:
-        try:
-            return resp.json()
-        except Exception:
-            return {"raw": resp.text}
-    return None
+    if not resp.content:
+        return None
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        return {"raw": resp.text}
+
+    # Ensure we return a dict[str, object] as declared; if the JSON is not a
+    # mapping, fall back to returning the raw text.
+    if isinstance(payload, dict):
+        return payload
+    return {"raw": resp.text}
 
 
 def _print_hub_status(
@@ -389,30 +391,6 @@ def _require_service_client(config: MLXHubConfig) -> bool:
     return True
 
 
-def _resolve_controller_base_url(config: MLXHubConfig) -> str:
-    """Resolve the base URL for the hub controller.
-
-    Parameters
-    ----------
-    config : MLXHubConfig
-        The hub configuration.
-
-    Returns
-    -------
-    str
-        The base URL for the controller.
-    """
-    host = (config.host or "127.0.0.1").strip()
-    if host in {"0.0.0.0", "::", "[::]"}:
-        host = "127.0.0.1"
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    port = config.port or 8000
-    return f"http://{host}:{port}"
-
-
 def _perform_memory_action_request(
     config: MLXHubConfig,
     model_name: str,
@@ -448,7 +426,11 @@ def _perform_memory_action_request(
         )
     except click.ClickException as exc:
         return False, str(exc)
-    message = (payload or {}).get("message") or f"Memory {action} requested"
+    raw_message = (payload or {}).get("message")
+    if raw_message is None:
+        message = f"Memory {action} requested"
+    else:
+        message = str(raw_message)
     return True, message
 
 
@@ -493,80 +475,6 @@ def _run_memory_actions(
             _flash(f"{target}: {message}", tone="error")
     if had_error:
         raise click.ClickException("One or more memory actions failed")
-
-
-def _wait_for_controller_available(config: MLXHubConfig, timeout: float = 20.0) -> bool:
-    """Wait for the hub controller to become available.
-
-    Parameters
-    ----------
-    config : MLXHubConfig
-        The hub configuration.
-    timeout : float, optional
-        Maximum time to wait in seconds, defaults to 20.0.
-
-    Returns
-    -------
-    bool
-        True if the controller became available, False otherwise.
-    """
-    base_url = _resolve_controller_base_url(config)
-    deadline = time.time() + timeout
-    last_error: str | None = None
-    while time.time() < deadline:
-        try:
-            response = httpx.get(f"{base_url}/health", timeout=5.0)
-            if response.status_code < 500:
-                return True
-        except httpx.HTTPError as exc:  # pragma: no cover - network timing
-            last_error = str(exc)
-        time.sleep(0.5)
-    if last_error:
-        logger.debug(f"Controller readiness check failed: {last_error}")
-    return False
-
-
-def _start_controller_if_needed(config: MLXHubConfig) -> None:
-    """Start the hub controller if it's not already running.
-
-    Parameters
-    ----------
-    config : MLXHubConfig
-        The hub configuration.
-
-    Raises
-    ------
-    click.ClickException
-        If the configuration is not saved or the controller fails to start.
-    """
-    if is_hub_controller_running(config):
-        _flash("Hub controller already running", tone="warning")
-        return
-    if config.source_path is None:
-        raise click.ClickException(
-            "Hub configuration must be saved to disk before starting the controller."
-        )
-    pid = start_hub_controller_process(config.source_path)
-    _flash(f"Launching hub controller (pid={pid})", tone="info")
-    if not _wait_for_controller_available(config):
-        raise click.ClickException(
-            "Hub controller failed to start within 20 seconds. Inspect hub logs for details."
-        )
-    _flash("Hub controller is now running", tone="success")
-
-
-def _stop_controller_if_running(config: MLXHubConfig) -> None:
-    """Stop the hub controller if it's running.
-
-    Parameters
-    ----------
-    config : MLXHubConfig
-        The hub configuration.
-    """
-    if stop_hub_controller_process(config):
-        _flash("Hub controller shutdown requested", tone="success")
-    else:
-        _flash("Hub controller is not running", tone="warning")
 
 
 def _format_duration(seconds: float | None) -> str:
@@ -948,8 +856,6 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
             "  uvicorn app.hub.daemon:create_app --host 127.0.0.1 --port 8001"
         ) from exc
 
-    _start_controller_if_needed(config)
-
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
     if config.enable_status_page:
         click.echo(f"Browse to http://{config.host}:{config.port}/hub for the status dashboard")
@@ -1016,8 +922,8 @@ def hub_stop(ctx: click.Context) -> None:
     """
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
-    _stop_controller_if_running(config)
     try:
+        _call_daemon_api(config, "POST", "/hub/reload")
         _call_daemon_api(config, "POST", "/hub/shutdown")
     except click.ClickException as exc:
         raise click.ClickException(f"Hub shutdown failed: {exc}") from exc

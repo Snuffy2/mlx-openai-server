@@ -11,7 +11,10 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from fastapi.testclient import TestClient
 import httpx
+from httpx import ASGITransport
+from loguru import logger
 import pytest
 
 from app.hub.daemon import create_app
@@ -33,10 +36,10 @@ class _StubSupervisor:
         self.started.pop(name, None)
         return {"status": "stopped", "name": name}
 
-    async def load_model_memory(self, name: str, reason: str = "manual") -> dict[str, Any]:
+    async def load_model_memory(self, name: str, _reason: str = "manual") -> dict[str, Any]:
         return {"status": "memory_loaded", "name": name}
 
-    async def unload_model_memory(self, name: str, reason: str = "manual") -> dict[str, Any]:
+    async def unload_model_memory(self, name: str, _reason: str = "manual") -> dict[str, Any]:
         return {"status": "memory_unloaded", "name": name}
 
     async def reload_config(self) -> dict[str, Any]:
@@ -45,6 +48,7 @@ class _StubSupervisor:
     async def shutdown_all(self) -> None:
         # mark called so tests can assert the background task ran
         self.shutdown_called = True
+        logger.info("Stub shutdown called")
 
 
 @pytest.mark.asyncio
@@ -65,15 +69,15 @@ models:
     stub = _StubSupervisor()
     app.state.supervisor = stub
 
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
-        r = await client.get("/health")
-        assert r.status_code == 200
-        assert r.json() == {"status": "ok"}
+    client = TestClient(app)
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
 
-        r = await client.get("/hub/status")
-        assert r.status_code == 200
-        payload = r.json()
-        assert "models" in payload and isinstance(payload["models"], list)
+    r = client.get("/hub/status")
+    assert r.status_code == 200
+    payload = r.json()
+    assert "models" in payload and isinstance(payload["models"], list)
 
 
 @pytest.mark.asyncio
@@ -94,22 +98,22 @@ models:
     stub = _StubSupervisor()
     app.state.supervisor = stub
 
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
-        r = await client.post("/hub/models/alpha/start")
-        assert r.status_code == 200
-        assert r.json()["status"] == "started"
+    client = TestClient(app)
+    r = client.post("/hub/models/alpha/start")
+    assert r.status_code == 200
+    assert r.json()["status"] == "started"
 
-        r = await client.post("/hub/models/alpha/stop")
-        assert r.status_code == 200
-        assert r.json()["status"] == "stopped"
+    r = client.post("/hub/models/alpha/stop")
+    assert r.status_code == 200
+    assert r.json()["status"] == "stopped"
 
-        r = await client.post("/hub/models/alpha/load-model", json={"reason": "dashboard"})
-        assert r.status_code == 200
-        assert r.json()["status"] == "memory_loaded"
+    r = client.post("/hub/models/alpha/load-model", json={"reason": "dashboard"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "memory_loaded"
 
-        r = await client.post("/hub/models/alpha/unload-model", json={"reason": "cli"})
-        assert r.status_code == 200
-        assert r.json()["status"] == "memory_unloaded"
+    r = client.post("/hub/models/alpha/unload-model", json={"reason": "cli"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "memory_unloaded"
 
 
 @pytest.mark.asyncio
@@ -130,11 +134,13 @@ models:
     stub = _StubSupervisor()
     app.state.supervisor = stub
 
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         r = await client.post("/hub/shutdown")
         assert r.status_code == 200
         assert r.json() == {"status": "shutdown_scheduled"}
 
         # background tasks run after response; give the loop a moment
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
         assert stub.shutdown_called is True

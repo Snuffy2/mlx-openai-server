@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from http import HTTPStatus
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -19,8 +18,6 @@ from loguru import logger
 from pydantic import ValidationError
 
 from ..hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
-from ..hub.errors import HubControllerError
-from ..hub.runtime import HubRuntime
 from ..schemas.openai import (
     HubModelActionRequest,
     HubModelActionResponse,
@@ -68,20 +65,14 @@ def start_hub_service_process(
         sys.executable,
         "-m",
         "uvicorn",
-        "app.hub.daemon:create_app",
+        f"app.hub.daemon:create_app('{config_path}')",
         "--host",
         host_val,
         "--port",
         port_val,
     ]
-    # Propagate the provided hub config path to the spawned daemon via
-    # `MLX_HUB_CONFIG_PATH` so the child process can load a non-default
-    # `hub.yaml` without modifying the uvicorn invocation.
-    env = os.environ.copy()
-    if config_path:
-        env["MLX_HUB_CONFIG_PATH"] = str(config_path)
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc.pid
 
 
@@ -797,7 +788,7 @@ def _daemon_base_url(config: MLXHubConfig) -> str:
         host = host[1:-1]
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    port = config.port or 8001
+    port = config.daemon_port
     return f"http://{host}:{port}"
 
 
@@ -834,9 +825,13 @@ async def _call_daemon_api_async(
 
     if resp.content:
         try:
-            return resp.json()
+            payload = resp.json()
         except Exception:
             return {"raw": resp.text}
+        if isinstance(payload, dict):
+            return payload
+        # Wrap non-dict payloads in a dict to maintain the declared return type
+        return {"raw": payload}
     return None
 
 
@@ -874,9 +869,13 @@ def _call_daemon_api_sync(
 
     if resp.content:
         try:
-            return resp.json()
+            payload = resp.json()
         except Exception:
             return {"raw": resp.text}
+        if isinstance(payload, dict):
+            return payload
+        # Wrap non-dict payloads in a dict to maintain the declared return type
+        return {"raw": payload}
     return None
 
 
@@ -966,7 +965,7 @@ def _controller_unavailable_response() -> JSONResponse:
     )
 
 
-def _controller_error_response(exc: HubControllerError) -> JSONResponse:
+def _controller_error_response(exc: Exception) -> JSONResponse:
     """Convert a HubControllerError into a JSON API response.
 
     Parameters
@@ -979,7 +978,7 @@ def _controller_error_response(exc: HubControllerError) -> JSONResponse:
     JSONResponse
         JSON error response.
     """
-    status = exc.status_code or HTTPStatus.SERVICE_UNAVAILABLE
+    status = getattr(exc, "status_code", HTTPStatus.INTERNAL_SERVER_ERROR)
     error_type = "invalid_request_error"
     if status == HTTPStatus.TOO_MANY_REQUESTS:
         error_type = "rate_limit_error"
@@ -1036,7 +1035,6 @@ def _model_created_timestamp(config: MLXHubConfig) -> int:
 def _build_models_from_config(
     config: MLXHubConfig,
     live_snapshot: dict[str, Any] | None,
-    runtime: HubRuntime | None = None,
 ) -> tuple[list[Model], HubStatusCounts]:
     """Build model list and status counts from hub config and live snapshot.
 
@@ -1063,13 +1061,6 @@ def _build_models_from_config(
                 if isinstance(name, str):
                     live_entries[name] = entry
 
-    runtime_lookup: dict[str, dict[str, Any]] = {}
-    if runtime is not None:
-        for summary in runtime.describe_models(None):
-            name = summary.get("name")
-            if isinstance(name, str):
-                runtime_lookup[name] = summary
-
     created_ts = _model_created_timestamp(config)
     rendered: list[Model] = []
     process_running = 0
@@ -1078,8 +1069,7 @@ def _build_models_from_config(
         name = server_cfg.name or server_cfg.model_identifier
         live = live_entries.get(name, {})
         state = str(live.get("state") or "inactive").lower()
-        runtime_summary = runtime_lookup.get(name)
-        memory_state = str(runtime_summary.get("status")) if runtime_summary else None
+        memory_state = None
         if state == "running":
             process_running += 1
         if memory_state == "loaded":
@@ -1100,9 +1090,6 @@ def _build_models_from_config(
             "exit_code": live.get("exit_code"),
             "auto_unload_minutes": server_cfg.auto_unload_minutes,
         }
-        if runtime_summary is not None:
-            metadata["memory_last_error"] = runtime_summary.get("last_error")
-            metadata["memory_last_transition_at"] = runtime_summary.get("last_transition_at")
         rendered.append(
             Model(
                 id=name,
@@ -1113,7 +1100,7 @@ def _build_models_from_config(
             )
         )
 
-    loaded_count = memory_loaded if runtime_lookup else process_running
+    loaded_count = process_running
     counts = HubStatusCounts(
         registered=len(rendered),
         started=process_running,
@@ -1313,8 +1300,7 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
     except HubServiceError as exc:
         warnings.append(f"Hub manager unavailable: {exc}")
 
-    runtime = getattr(raw_request.app.state, "hub_runtime", None)
-    models, counts = _build_models_from_config(config, snapshot, runtime=runtime)
+    models, counts = _build_models_from_config(config, snapshot)
     response_timestamp = int(time.time())
     if snapshot is not None:
         timestamp_value = snapshot.get("timestamp")
@@ -1403,7 +1389,9 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
             "Hub configuration must be saved to disk before starting the manager."
         )
 
-    pid = start_hub_service_process(str(config.source_path), host=config.host, port=config.port)
+    pid = start_hub_service_process(
+        str(config.source_path), host=config.host, port=config.daemon_port
+    )
 
     # Wait for daemon to become available
     deadline = time.time() + 20.0
@@ -1433,7 +1421,7 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
         snapshot = None
         logger.warning(f"Hub manager started (pid={pid}) but status fetch failed: {exc}")
 
-    details = {"pid": pid}
+    details: dict[str, Any] = {"pid": pid}
     if snapshot is not None:
         details["models"] = snapshot.get("models", [])
     return HubServiceActionResponse(
@@ -1757,7 +1745,7 @@ async def _hub_memory_controller_action(
         else:
             await controller.unload_model(target, reason=reason)
             message = f"Model '{target}' memory unload requested"
-    except HubControllerError as exc:
+    except Exception as exc:
         return _controller_error_response(exc)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception(
@@ -1765,7 +1753,7 @@ async def _hub_memory_controller_action(
         )
         return JSONResponse(
             content=create_error_response(
-                f"Unexpected failure while executing {action.replace('_', ' ')} for '{target}'",
+                f"Unexpected failure while executing {action.replace('-', ' ')} for '{target}'",
                 "internal_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             ),

@@ -18,7 +18,6 @@ from ..handler.mlx_embeddings import MLXEmbeddingsHandler
 from ..handler.mlx_lm import MLXLMHandler
 from ..handler.mlx_vlm import MLXVLMHandler
 from ..handler.mlx_whisper import MLXWhisperHandler
-from ..hub.errors import HubControllerError
 from ..schemas.openai import (
     ChatCompletionChunk,
     ChatCompletionMessageToolCall,
@@ -119,8 +118,8 @@ async def _get_handler_or_error(
             )
         try:
             handler = await controller.acquire_handler(target, reason=reason)
-        except HubControllerError as exc:
-            status = exc.status_code or HTTPStatus.INTERNAL_SERVER_ERROR
+        except Exception as exc:
+            status = getattr(exc, "status_code", HTTPStatus.INTERNAL_SERVER_ERROR)
             return (
                 None,
                 JSONResponse(
