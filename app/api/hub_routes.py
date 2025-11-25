@@ -16,7 +16,13 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 from loguru import logger
 
-from ..hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
+from ..const import (
+    DEFAULT_API_HOST,
+    DEFAULT_BIND_HOST,
+    DEFAULT_HUB_CONFIG_PATH,
+    DEFAULT_MODEL_STARTING_PORT,
+)
+from ..hub.config import PORT_MAX, HubConfigError, MLXHubConfig, _is_port_available, load_hub_config
 from ..schemas.openai import (
     HubModelActionRequest,
     HubModelActionResponse,
@@ -53,17 +59,30 @@ def start_hub_service_process(
     Python interpreter. It returns the spawned PID. It is intended as a
     development convenience for the API's `/hub/service/start` endpoint.
     """
-    host_val = host or "127.0.0.1"
-    port_val = str(port or 8001)
+    host_val = host or DEFAULT_BIND_HOST
+    starting_port = port or DEFAULT_MODEL_STARTING_PORT
+
+    # Find an available port starting from the specified port
+    port_val = starting_port
+    while port_val <= PORT_MAX:
+        if _is_port_available(host_val, port_val):
+            break
+        port_val += 1
+    else:
+        raise HubServiceError(
+            f"Unable to find an available port for hub daemon starting at {starting_port}"
+        )
+
     cmd = [
         sys.executable,
         "-m",
         "uvicorn",
-        f"app.hub.daemon:create_app('{config_path}')",
+        "app.hub.daemon:create_app",
+        "--factory",
         "--host",
         host_val,
         "--port",
-        port_val,
+        str(port_val),
     ]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -775,9 +794,9 @@ def _load_hub_config_from_request(raw_request: Request) -> MLXHubConfig:
 
 def _daemon_base_url(config: MLXHubConfig) -> str:
     """Return the base HTTP URL for the hub daemon for the given config."""
-    host = (config.host or "127.0.0.1").strip()
+    host = (config.host or DEFAULT_BIND_HOST).strip()
     if host in {"0.0.0.0", "::", "[::]"}:
-        host = "127.0.0.1"
+        host = DEFAULT_API_HOST
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
     if ":" in host and not host.startswith("["):

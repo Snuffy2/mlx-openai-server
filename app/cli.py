@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 from typing import Any, Literal
@@ -20,8 +22,20 @@ import httpx
 from loguru import logger
 
 from .config import MLXServerConfig
+from .const import (
+    DEFAULT_BIND_HOST,
+    DEFAULT_CONTEXT_LENGTH,
+    DEFAULT_HUB_CONFIG_PATH,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_MODEL_TYPE,
+    DEFAULT_PORT,
+    DEFAULT_QUANTIZE,
+    DEFAULT_QUEUE_SIZE,
+    DEFAULT_QUEUE_TIMEOUT,
+)
 from .handler.parser.factory import PARSER_REGISTRY
-from .hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
+from .hub.config import HubConfigError, MLXHubConfig, load_hub_config
 
 # Hub IPC service removed: CLI uses HTTP API to contact the hub daemon
 from .main import start
@@ -126,8 +140,8 @@ def _controller_base_url(config: MLXHubConfig) -> str:
     The daemon host/port values are read from the hub config. This helper
     centralizes where the CLI constructs the daemon base URL.
     """
-    host = config.host or "127.0.0.1"
-    port = config.port or 8001
+    host = config.host or DEFAULT_BIND_HOST
+    port = config.daemon_port
     return f"http://{host}:{port}"
 
 
@@ -593,7 +607,7 @@ def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
 )
 @click.option(
     "--model-type",
-    default="lm",
+    default=DEFAULT_MODEL_TYPE,
     type=click.Choice(
         ["lm", "multimodal", "image-generation", "image-edit", "embeddings", "whisper"]
     ),
@@ -601,20 +615,30 @@ def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
 )
 @click.option(
     "--context-length",
-    default=32768,
+    default=DEFAULT_CONTEXT_LENGTH,
     type=int,
     help="Context length for language models. Only works with `lm` or `multimodal` model types.",
 )
-@click.option("--port", default=8000, type=int, help="Port to run the server on")
-@click.option("--host", default="0.0.0.0", help="Host to run the server on")
+@click.option("--port", default=DEFAULT_PORT, type=int, help="Port to run the server on")
+@click.option("--host", default=DEFAULT_BIND_HOST, help="Host to run the server on")
 @click.option(
-    "--max-concurrency", default=1, type=int, help="Maximum number of concurrent requests"
+    "--max-concurrency",
+    default=DEFAULT_MAX_CONCURRENCY,
+    type=int,
+    help="Maximum number of concurrent requests",
 )
-@click.option("--queue-timeout", default=300, type=int, help="Request timeout in seconds")
-@click.option("--queue-size", default=100, type=int, help="Maximum queue size for pending requests")
+@click.option(
+    "--queue-timeout", default=DEFAULT_QUEUE_TIMEOUT, type=int, help="Request timeout in seconds"
+)
+@click.option(
+    "--queue-size",
+    default=DEFAULT_QUEUE_SIZE,
+    type=int,
+    help="Maximum queue size for pending requests",
+)
 @click.option(
     "--quantize",
-    default=8,
+    default=DEFAULT_QUANTIZE,
     type=int,
     help="Quantization level for the model. Only used for image-generation and image-edit Flux models.",
 )
@@ -654,7 +678,7 @@ def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
 )
 @click.option(
     "--log-level",
-    default="INFO",
+    default=DEFAULT_LOG_LEVEL,
     type=UpperChoice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
     help="Set the logging level. Default is INFO.",
 )
@@ -839,13 +863,61 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     models = model_names or None
 
     # Check daemon availability
+    daemon_running = False
     try:
         _call_daemon_api(config, "GET", "/health", timeout=2.0)
-    except click.ClickException as exc:
-        raise click.ClickException(
-            "Hub daemon is not running. Start it (for example):\n"
-            "  uvicorn app.hub.daemon:create_app --host 127.0.0.1 --port 8001"
-        ) from exc
+        daemon_running = True
+    except click.ClickException:
+        # Daemon not running, start it directly
+        if config.source_path is None:
+            raise click.ClickException(
+                "Hub configuration must be saved to disk before starting the manager."
+            ) from None
+
+        click.echo("Starting hub manager...")
+        host_val = config.host or DEFAULT_BIND_HOST
+        port_val = str(config.daemon_port)
+        cmd = [
+            sys.executable,  # Use the same Python executable
+            "-m",
+            "uvicorn",
+            "app.hub.daemon:create_app",
+            "--factory",
+            "--host",
+            host_val,
+            "--port",
+            port_val,
+        ]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=os.environ.copy(),
+                cwd=Path.cwd(),
+            )
+            click.echo(f"Hub manager process started (PID: {proc.pid})")
+        except Exception as exc:
+            raise click.ClickException(f"Failed to start hub manager: {exc}") from exc
+
+        # Wait for daemon to become available
+        deadline = time.time() + 20.0
+        while time.time() < deadline:
+            try:
+                _call_daemon_api(config, "GET", "/health", timeout=1.0)
+                daemon_running = True
+                click.echo("Hub manager is now running.")
+                break
+            except click.ClickException:
+                time.sleep(0.5)
+
+        if not daemon_running:
+            raise click.ClickException(
+                "Hub manager failed to start within 20 seconds.\n"
+                "You can also start it manually (for example):\n"
+                f"  uvicorn app.hub.daemon:create_app --host {host_val} --port {port_val}"
+            ) from None
 
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
     if config.enable_status_page:
