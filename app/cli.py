@@ -958,7 +958,9 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
     if config.enable_status_page:
         host_display = "localhost" if config.host == "0.0.0.0" else config.host
-        click.echo(f"Browse to http://{host_display}:{config.daemon_port}/hub for the status dashboard")
+        click.echo(
+            f"Browse to http://{host_display}:{config.daemon_port}/hub for the status dashboard"
+        )
 
     snapshot = None
     try:
