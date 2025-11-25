@@ -36,10 +36,10 @@ class _StubSupervisor:
         self.started.pop(name, None)
         return {"status": "stopped", "name": name}
 
-    async def load_model_memory(self, name: str) -> dict[str, Any]:
+    async def load_model(self, name: str) -> dict[str, Any]:
         return {"status": "memory_loaded", "name": name}
 
-    async def unload_model_memory(self, name: str) -> dict[str, Any]:
+    async def unload_model(self, name: str) -> dict[str, Any]:
         return {"status": "memory_unloaded", "name": name}
 
     async def reload_config(self) -> dict[str, Any]:
@@ -107,11 +107,11 @@ models:
     assert r.status_code == 200
     assert r.json()["status"] == "stopped"
 
-    r = client.post("/hub/models/alpha/load-model")
+    r = client.post("/hub/models/alpha/load")
     assert r.status_code == 200
     assert r.json()["status"] == "memory_loaded"
 
-    r = client.post("/hub/models/alpha/unload-model")
+    r = client.post("/hub/models/alpha/unload")
     assert r.status_code == 200
     assert r.json()["status"] == "memory_unloaded"
 

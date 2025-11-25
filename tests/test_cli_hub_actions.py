@@ -253,7 +253,7 @@ def test_render_watch_table_handles_empty_payload() -> None:
     assert _render_watch_table([], now=0) == "  (no managed processes)"
 
 
-def test_hub_memory_load_cli_calls_controller(
+def test_hub_load_model_cli_calls_controller(
     monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
 ) -> None:
     """`hub load-model` should delegate to the controller helper."""
@@ -282,7 +282,7 @@ def test_hub_memory_load_cli_calls_controller(
     assert captured == [(("alpha", "beta"), "load-model")]
 
 
-def test_hub_memory_unload_cli_surfaces_errors(
+def test_hub_unload_model_cli_surfaces_errors(
     monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
 ) -> None:
     """`hub unload-model` should propagate helper failures as CLI errors."""

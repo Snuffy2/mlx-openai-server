@@ -87,8 +87,8 @@ Flash helper tones (`info`, `success`, `warning`, `error`) mirror the HTML dashb
 | `/hub/service/stop` | POST | Requests shutdown, returning HTTP 503 if no manager is running. |
 | `/hub/models/{model}/start-model` | POST | Reloads, then issues `start_model`. HTTP 429 indicates group capacity exhaustion. |
 | `/hub/models/{model}/stop-model` | POST | Reloads, then issues `stop_model`. |
-| `/hub/models/{model}/load-model` | POST | Passes the request to the controller so it can instantiate the handler locally. |
-| `/hub/models/{model}/unload-model` | POST | Requests the controller tear down the in-memory handler and free resources. |
+| `/hub/models/{model}/load` | POST | Passes the request to the controller so it can instantiate the handler locally. |
+| `/hub/models/{model}/unload` | POST | Requests the controller tear down the in-memory handler and free resources. |
 
 All responses use the same OpenAI-style `error` envelope (`type`, `message`, `code`) so upstream tooling can reuse existing error handling paths.
 

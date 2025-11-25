@@ -15,7 +15,6 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import httpx
 from loguru import logger
-from pydantic import ValidationError
 
 from ..hub.config import DEFAULT_HUB_CONFIG_PATH, HubConfigError, MLXHubConfig, load_hub_config
 from ..schemas.openai import (
@@ -27,11 +26,6 @@ from ..schemas.openai import (
     Model,
 )
 from ..utils.errors import create_error_response
-
-# The legacy `app.hub.service` shim has been removed. The hub routes now
-# proxy control operations to the hub daemon over HTTP. Tests and other
-# callers may rely on `HubServiceError` for controlled failures, so expose
-# a local exception type with the same shape as the previous shim used.
 
 
 class HubServiceError(RuntimeError):
@@ -1156,78 +1150,6 @@ def get_running_hub_models(raw_request: Request) -> set[str] | None:
     return running
 
 
-def _build_legacy_hub_status(raw_request: Request) -> HubStatusResponse:
-    """Build hub status response for non-hub configurations.
-
-    Parameters
-    ----------
-    raw_request : Request
-        The incoming FastAPI request.
-
-    Returns
-    -------
-    HubStatusResponse
-        Hub status response.
-    """
-    registry = getattr(raw_request.app.state, "registry", None)
-    server_config = getattr(raw_request.app.state, "server_config", None)
-    controller_available = getattr(raw_request.app.state, "hub_controller", None) is not None
-    warnings: list[str] = []
-    status: Literal["ok", "degraded"] = "ok"
-    model_payloads: list[dict[str, Any]] = []
-
-    if registry is None:
-        warnings.append("Model registry unavailable; falling back to cached metadata.")
-    else:
-        try:
-            model_payloads = registry.list_models()
-        except Exception as exc:  # pragma: no cover - defensive logging
-            logger.error(f"Failed to read model registry. {type(exc).__name__}: {exc}")
-            warnings.append("Failed to read model registry; data may be stale.")
-            status = "degraded"
-
-    if not model_payloads:
-        cached_metadata = get_cached_model_metadata(raw_request)
-        if cached_metadata is not None:
-            model_payloads.append(cached_metadata)
-            warnings.append("Using cached single-model metadata.")
-        else:
-            warnings.append("No model metadata available.")
-            status = "degraded"
-
-    try:
-        models_data = [Model(**payload) for payload in model_payloads]
-    except ValidationError as exc:  # pragma: no cover - defensive logging
-        logger.error(f"Invalid model payload detected. {type(exc).__name__}: {exc}")
-        warnings.append("Encountered invalid model metadata; returning empty list.")
-        models_data = []
-        status = "degraded"
-
-    loaded_count = sum(
-        1
-        for model in models_data
-        if model.metadata is not None and model.metadata.get("status") == "initialized"
-    )
-
-    counts = HubStatusCounts(
-        registered=len(models_data),
-        started=loaded_count,
-        loaded=loaded_count,
-    )
-    warnings = list(dict.fromkeys(warnings))  # preserve order but deduplicate
-
-    return HubStatusResponse(
-        status=status,
-        timestamp=int(time.time()),
-        host=getattr(server_config, "host", None),
-        port=getattr(server_config, "port", None),
-        models=models_data,
-        counts=counts,
-        warnings=warnings,
-        controller_available=controller_available,
-    )
-
-
 def get_cached_model_metadata(raw_request: Request) -> dict[str, Any] | None:
     """Fetch cached model metadata from application state, if available.
 
@@ -1287,8 +1209,18 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
 
     try:
         config = _load_hub_config_from_request(raw_request)
-    except HubConfigError:
-        return _build_legacy_hub_status(raw_request)
+    except HubConfigError as exc:
+        controller_available = getattr(raw_request.app.state, "hub_controller", None) is not None
+        return HubStatusResponse(
+            status="degraded",
+            timestamp=int(time.time()),
+            host=None,
+            port=None,
+            models=[],
+            counts=HubStatusCounts(registered=0, started=0, loaded=0),
+            warnings=[f"Hub configuration unavailable: {exc}"],
+            controller_available=controller_available,
+        )
 
     warnings: list[str] = []
     snapshot: dict[str, Any] | None = None
@@ -1587,8 +1519,8 @@ async def hub_stop_model(
     return await _hub_model_service_action(raw_request, model_name, "stop-model")
 
 
-@hub_router.post("/hub/models/{model_name}/load-model", response_model=HubModelActionResponse)
-async def hub_memory_load_model(
+@hub_router.post("/hub/models/{model_name}/load", response_model=HubModelActionResponse)
+async def hub_load_model(
     model_name: str,
     raw_request: Request,
     payload: HubModelActionRequest | None = None,
@@ -1612,8 +1544,8 @@ async def hub_memory_load_model(
     return await _hub_memory_controller_action(raw_request, model_name, "load-model", payload)
 
 
-@hub_router.post("/hub/models/{model_name}/unload-model", response_model=HubModelActionResponse)
-async def hub_memory_unload_model(
+@hub_router.post("/hub/models/{model_name}/unload", response_model=HubModelActionResponse)
+async def hub_unload_model(
     model_name: str,
     raw_request: Request,
     payload: HubModelActionRequest | None = None,

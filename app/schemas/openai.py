@@ -482,7 +482,7 @@ class HubStatusResponse(OpenAIBaseModel):
         False,
         description=(
             "True when this FastAPI instance hosts the hub controller, which enables dashboard "
-            "memory controls and CLI load-model/unload-model commands."
+            "memory controls and CLI load-model/unload commands."
         ),
     )
 

@@ -988,7 +988,7 @@ def hub_stop_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 @hub.command(name="load-model", help="Load handlers for one or more models into memory")
 @click.argument("model_names", nargs=-1, required=True)
 @click.pass_context
-def hub_memory_load(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+def hub_load_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger controller-backed memory loads for the provided models."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
@@ -998,7 +998,7 @@ def hub_memory_load(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 @hub.command(name="unload-model", help="Unload handlers for one or more models from memory")
 @click.argument("model_names", nargs=-1, required=True)
 @click.pass_context
-def hub_memory_unload(ctx: click.Context, model_names: tuple[str, ...]) -> None:
+def hub_unload_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger controller-backed memory unloads for the provided models."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))

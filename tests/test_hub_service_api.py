@@ -338,14 +338,14 @@ def test_hub_service_reload_endpoint_returns_diff(
     assert state.reload_calls == 1
 
 
-def test_hub_memory_load_invokes_controller(
+def test_hub_load_model_invokes_controller(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
-    """/hub/models/{model}/load-model should call the controller."""
+    """/hub/models/{model}/load should call the controller."""
 
     client, _state, controller = hub_service_app
 
-    response = client.post("/hub/models/alpha/load-model", json={"reason": "dashboard"})
+    response = client.post("/hub/models/alpha/load", json={"reason": "dashboard"})
 
     assert response.status_code == HTTPStatus.OK
     assert controller.loaded == ["alpha"]
@@ -358,11 +358,11 @@ def test_hub_memory_actions_surface_controller_errors(
 
     client, _state, controller = hub_service_app
 
-    response = client.post("/hub/models/denied/load-model", json={})
+    response = client.post("/hub/models/denied/load", json={})
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     payload = response.json()
     assert "group busy" in payload["error"]["message"]
 
-    response = client.post("/hub/models/missing/unload-model", json={})
+    response = client.post("/hub/models/missing/unload", json={})
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert controller.unloaded[-1] == "missing"

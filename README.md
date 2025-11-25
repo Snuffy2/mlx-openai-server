@@ -853,8 +853,8 @@ Control API
 - `POST /hub/shutdown` — Gracefully request the daemon to stop all managed models and exit.
 - `POST /hub/models/{model}/start` — Start the worker process for the named model (if configured).
 - `POST /hub/models/{model}/stop` — Stop the worker process for the named model.
-- `POST /hub/models/{model}/load-model` — Instruct the daemon/controller to load handlers into memory for the named model.
-- `POST /hub/models/{model}/unload-model` — Instruct the daemon/controller to unload handlers from memory for the named model.
+- `POST /hub/models/{model}/load` — Instruct the daemon/controller to load handlers into memory for the named model.
+- `POST /hub/models/{model}/unload` — Instruct the daemon/controller to unload handlers from memory for the named model.
 
 CLI usage
 ```bash

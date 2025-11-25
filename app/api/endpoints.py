@@ -50,13 +50,13 @@ from .hub_routes import (
     get_cached_model_metadata,
     get_configured_model_id,
     get_running_hub_models,
-    hub_memory_load_model,
-    hub_memory_unload_model,
+    hub_load_model,
     hub_router,
     hub_start_model,
     hub_status,
     hub_status_page,
     hub_stop_model,
+    hub_unload_model,
 )
 
 router = APIRouter()
@@ -68,8 +68,8 @@ __all__ = [
     "hub_status_page",
     "hub_start_model",
     "hub_stop_model",
-    "hub_memory_load_model",
-    "hub_memory_unload_model",
+    "hub_load_model",
+    "hub_unload_model",
 ]
 
 

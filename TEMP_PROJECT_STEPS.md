@@ -7,7 +7,7 @@ Summary
 - Entrypoint: `app/hub/daemon.py` (FastAPI app factory `create_app`).
 
 Required edits (high-level)
-- Create `app/hub/daemon.py` implementing `HubSupervisor` and FastAPI endpoints: `GET /health`, `GET /hub/status`, `POST /hub/reload`, `POST /hub/shutdown`, `POST /hub/models/{name}/start`, `POST /hub/models/{name}/stop`, `POST /hub/models/{name}/load-model`, `POST /hub/models/{name}/unload-model`.
+- Create `app/hub/daemon.py` implementing `HubSupervisor` and FastAPI endpoints: `GET /health`, `GET /hub/status`, `POST /hub/reload`, `POST /hub/shutdown`, `POST /hub/models/{name}/start`, `POST /hub/models/{name}/stop`, `POST /hub/models/{name}/load`, `POST /hub/models/{name}/unload`.
 - Replace `app/hub/service.py` usage: remove compatibility shims. All hub control flows must call the daemon HTTP API directly via `_call_daemon_api(...)` in `app/cli.py`.
 - Edit `app/cli.py` to add `_call_daemon_api(...)` helper and make CLI hub commands call the daemon HTTP API exclusively (status, start/stop model, reload, memory load/unload, watch polling).
   - Note: the CLI intentionally fails fast if the daemon is unreachable and will suggest a local start command.

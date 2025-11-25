@@ -182,7 +182,7 @@ class HubSupervisor:
         logger.info(f"Stopped model {name} exit_code={record.exit_code}")
         return {"status": "stopped", "name": name, "exit_code": record.exit_code}
 
-    async def load_model_memory(self, name: str) -> dict[str, Any]:
+    async def load_model(self, name: str) -> dict[str, Any]:
         """Mark a model's memory/runtime as loaded.
 
         This is a lightweight marker; heavy loading work should be scheduled
@@ -198,7 +198,7 @@ class HubSupervisor:
             logger.info(f"Marked model {name} memory_loaded")
             return {"status": "memory_loaded", "name": name}
 
-    async def unload_model_memory(self, name: str) -> dict[str, Any]:
+    async def unload_model(self, name: str) -> dict[str, Any]:
         """Mark a model's memory/runtime as unloaded.
 
         The supervisor will not attempt to free in-process handler state here;
@@ -372,14 +372,14 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         supervisor = cast("HubSupervisor", request.app.state.supervisor)
         return await supervisor.stop_model(name)
 
-    @app.post("/hub/models/{name}/load-model")
+    @app.post("/hub/models/{name}/load")
     async def model_load(name: str, request: Request) -> dict[str, Any]:
         supervisor = cast("HubSupervisor", request.app.state.supervisor)
-        return await supervisor.load_model_memory(name)
+        return await supervisor.load_model(name)
 
-    @app.post("/hub/models/{name}/unload-model")
+    @app.post("/hub/models/{name}/unload")
     async def model_unload(name: str, request: Request) -> dict[str, Any]:
         supervisor = cast("HubSupervisor", request.app.state.supervisor)
-        return await supervisor.unload_model_memory(name)
+        return await supervisor.unload_model(name)
 
     return app

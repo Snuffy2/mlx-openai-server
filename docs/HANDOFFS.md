@@ -402,7 +402,7 @@ This document tracks session-to-session handoffs for the `mlx-openai-server-lab`
 
 ## Hub Daemon Migration — Single-daemon approach (summary)
 
-The hub architecture is now a single long-lived FastAPI "hub daemon" that owns process supervision, memory/runtime state, and an HTTP control plane. The daemon exposes a canonical API rooted under `/hub/*` (examples: `/hub/status`, `/hub/models/{name}/start`, `/hub/models/{name}/load-model`) and is implemented in `app/hub/daemon.py`.
+The hub architecture is now a single long-lived FastAPI "hub daemon" that owns process supervision, memory/runtime state, and an HTTP control plane. The daemon exposes a canonical API rooted under `/hub/*` (examples: `/hub/status`, `/hub/models/{name}/start`, `/hub/models/{name}/load`) and is implemented in `app/hub/daemon.py`.
 
 Key points:
 - Ownership: the daemon is the sole owner of model process lifecycle (spawn/monitor/terminate), handler memory load/unload state, and per-model metadata.
