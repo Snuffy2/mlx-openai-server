@@ -482,7 +482,7 @@ class HubStatusResponse(OpenAIBaseModel):
         False,
         description=(
             "True when this FastAPI instance hosts the hub controller, which enables dashboard "
-            "memory controls and CLI load-model/unload commands."
+            "memory controls and CLI load/unload commands."
         ),
     )
 
@@ -495,7 +495,7 @@ class HubModelActionResponse(OpenAIBaseModel):
     """Response payload emitted after hub model actions."""
 
     status: Literal["ok"] = Field("ok", description="Indicates the action was accepted.")
-    action: Literal["start-model", "stop-model", "load-model", "unload-model"] = Field(
+    action: Literal["start", "stop", "load", "unload"] = Field(
         ...,
         description="Action that was performed.",
     )

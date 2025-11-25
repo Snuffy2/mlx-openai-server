@@ -6,7 +6,7 @@ import asyncio
 import gc
 from http import HTTPStatus
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from fastapi import HTTPException
@@ -16,6 +16,9 @@ from ..core.queue import RequestQueue
 from ..models.mlx_embeddings import MLX_Embeddings
 from ..schemas.openai import EmbeddingRequest
 from ..utils.errors import create_error_response
+
+if TYPE_CHECKING:
+    from ..core.manager_protocol import ManagerProtocol  # noqa: F401
 
 
 class MLXEmbeddingsHandler:

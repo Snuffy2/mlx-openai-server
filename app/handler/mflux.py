@@ -12,7 +12,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import uuid
 
 from fastapi import HTTPException
@@ -32,6 +32,9 @@ from ..schemas.openai import (
     ImageSize,
 )
 from ..utils.errors import create_error_response
+
+if TYPE_CHECKING:
+    from ..core.manager_protocol import ManagerProtocol  # noqa: F401
 
 
 class MLXFluxHandler:

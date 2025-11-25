@@ -495,7 +495,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                     const memoryGroupVisible = controllerAvailable && processRunning;
                     const memoryLoaded = memoryState === 'loaded';
                     const memoryButtonLabel = memoryLoaded ? 'Unload' : 'Load';
-                    const memoryButtonAction = memoryLoaded ? 'unload-model' : 'load-model';
+                    const memoryButtonAction = memoryLoaded ? 'unload' : 'load';
                     const memoryButtonDisabled = ['loading', 'unloading'].includes(memoryState);
                     return `<tr>
                         <td>${safeId}</td>
@@ -589,6 +589,7 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             const button = event.currentTarget;
             const model = button.getAttribute('data-model');
             const action = button.getAttribute('data-action');
+            const normalizedAction = action ? action.replace(/-model$/, '') : action;
             const scope = button.getAttribute('data-scope') ?? 'process';
             if (!model || !action) {
                 return;
@@ -601,15 +602,15 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
             });
             const originalLabel = button.textContent;
             const pendingLabel = {
-                'start-model': 'Starting…',
-                'stop-model': 'Stopping…',
-                'load-model': 'Loading…',
-                'unload-model': 'Unloading…',
-            }[action] ?? 'Working…';
+                'start': 'Starting…',
+                'stop': 'Stopping…',
+                'load': 'Loading…',
+                'unload': 'Unloading…',
+            }[normalizedAction] ?? 'Working…';
             button.textContent = pendingLabel;
 
             try {
-                const endpoint = `/hub/models/${encodeURIComponent(model)}/${action}`;
+                const endpoint = `/hub/models/${encodeURIComponent(model)}/${normalizedAction}`;
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -623,11 +624,11 @@ _HUB_STATUS_PAGE_HTML = """<!DOCTYPE html>
                 }
                 const scopeLabel = scope === 'memory' ? 'memory' : 'process';
                 const verb = {
-                    'start-model': 'Start',
-                    'stop-model': 'Stop',
-                    'load-model': 'Load',
-                    'unload-model': 'Unload',
-                }[action] ?? 'Action';
+                    'start': 'Start',
+                    'stop': 'Stop',
+                    'load': 'Load',
+                    'unload': 'Unload',
+                }[normalizedAction] ?? 'Action';
                 showToast(`${verb} ${scopeLabel} request sent for ${model}`, 'success');
             } catch (error) {
                 showToast(error.message ?? 'Action failed', 'error');
@@ -991,6 +992,34 @@ def _controller_error_response(exc: Exception) -> JSONResponse:
     JSONResponse
         JSON error response.
     """
+    status = getattr(exc, "status_code", HTTPStatus.INTERNAL_SERVER_ERROR)
+    error_type = "invalid_request_error"
+    if status == HTTPStatus.TOO_MANY_REQUESTS:
+        error_type = "rate_limit_error"
+    elif status >= HTTPStatus.INTERNAL_SERVER_ERROR:
+        error_type = "service_unavailable"
+    return JSONResponse(
+        content=create_error_response(str(exc), error_type, status),
+        status_code=status,
+    )
+
+
+def _registry_unavailable_response() -> JSONResponse:
+    """Create a JSON error response for missing ModelRegistry on app.state."""
+
+    return JSONResponse(
+        content=create_error_response(
+            "Model registry is not available. Ensure the server is configured with a registry.",
+            "service_unavailable",
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        ),
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+
+
+def _registry_error_response(exc: Exception) -> JSONResponse:
+    """Convert registry exceptions into JSON responses."""
+
     status = getattr(exc, "status_code", HTTPStatus.INTERNAL_SERVER_ERROR)
     error_type = "invalid_request_error"
     if status == HTTPStatus.TOO_MANY_REQUESTS:
@@ -1502,7 +1531,7 @@ async def hub_service_reload(raw_request: Request) -> HubServiceActionResponse |
     )
 
 
-@hub_router.post("/hub/models/{model_name}/start-model", response_model=HubModelActionResponse)
+@hub_router.post("/hub/models/{model_name}/start", response_model=HubModelActionResponse)
 async def hub_start_model(
     model_name: str,
     raw_request: Request,
@@ -1526,10 +1555,10 @@ async def hub_start_model(
     """
 
     _ = payload  # reserved for future compatibility
-    return await _hub_model_service_action(raw_request, model_name, "start-model")
+    return await _hub_model_service_action(raw_request, model_name, "start")
 
 
-@hub_router.post("/hub/models/{model_name}/stop-model", response_model=HubModelActionResponse)
+@hub_router.post("/hub/models/{model_name}/stop", response_model=HubModelActionResponse)
 async def hub_stop_model(
     model_name: str,
     raw_request: Request,
@@ -1553,7 +1582,7 @@ async def hub_stop_model(
     """
 
     _ = payload  # reserved for future compatibility
-    return await _hub_model_service_action(raw_request, model_name, "stop-model")
+    return await _hub_model_service_action(raw_request, model_name, "stop")
 
 
 @hub_router.post("/hub/models/{model_name}/load", response_model=HubModelActionResponse)
@@ -1578,7 +1607,7 @@ async def hub_load_model(
     HubModelActionResponse or JSONResponse
         Response indicating the result of the load action.
     """
-    return await _hub_memory_controller_action(raw_request, model_name, "load-model", payload)
+    return await _hub_memory_controller_action(raw_request, model_name, "load", payload)
 
 
 @hub_router.post("/hub/models/{model_name}/unload", response_model=HubModelActionResponse)
@@ -1603,13 +1632,106 @@ async def hub_unload_model(
     HubModelActionResponse or JSONResponse
         Response indicating the result of the unload action.
     """
-    return await _hub_memory_controller_action(raw_request, model_name, "unload-model", payload)
+    return await _hub_memory_controller_action(raw_request, model_name, "unload", payload)
+
+
+@hub_router.post("/hub/models/{model_name}/vram/load", response_model=HubModelActionResponse)
+async def hub_vram_load(
+    model_name: str,
+    raw_request: Request,
+    payload: HubModelActionRequest | None = None,
+) -> HubModelActionResponse | JSONResponse:
+    """Admin endpoint to request VRAM residency for a registered model via the registry."""
+
+    target = _normalize_model_name(model_name)
+    if not target:
+        return JSONResponse(
+            content=create_error_response(
+                "Model name cannot be empty",
+                "invalid_request_error",
+                HTTPStatus.BAD_REQUEST,
+            ),
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+
+    registry = getattr(raw_request.app.state, "model_registry", None)
+    if registry is None:
+        return _registry_unavailable_response()
+
+    try:
+        await registry.request_vram_load(
+            target,
+            force=bool(getattr(payload, "force", False)),
+            timeout=getattr(payload, "timeout", None),
+        )
+        message = f"VRAM load requested for '{target}'"
+    except Exception as exc:
+        return _registry_error_response(exc)
+
+    return HubModelActionResponse(status="ok", action="load", model=target, message=message)
+
+
+@hub_router.post("/hub/models/{model_name}/vram/unload", response_model=HubModelActionResponse)
+async def hub_vram_unload(
+    model_name: str,
+    raw_request: Request,
+    payload: HubModelActionRequest | None = None,
+) -> HubModelActionResponse | JSONResponse:
+    """Admin endpoint to request VRAM release for a registered model via the registry."""
+
+    target = _normalize_model_name(model_name)
+    if not target:
+        return JSONResponse(
+            content=create_error_response(
+                "Model name cannot be empty",
+                "invalid_request_error",
+                HTTPStatus.BAD_REQUEST,
+            ),
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+
+    registry = getattr(raw_request.app.state, "model_registry", None)
+    if registry is None:
+        return _registry_unavailable_response()
+
+    try:
+        await registry.request_vram_unload(target, timeout=getattr(payload, "timeout", None))
+        message = f"VRAM unload requested for '{target}'"
+    except Exception as exc:
+        return _registry_error_response(exc)
+
+    return HubModelActionResponse(status="ok", action="unload", model=target, message=message)
+
+
+@hub_router.post("/hub/shutdown", response_model=HubServiceActionResponse)
+async def hub_shutdown(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
+    """Request the hub daemon to shutdown all managed models and exit.
+
+    This endpoint forwards the shutdown request to the running hub manager
+    process. If the hub manager is not running an appropriate error is returned.
+    """
+    try:
+        config = _load_hub_config_from_request(raw_request)
+    except HubConfigError as exc:
+        return _hub_config_error_response(str(exc))
+
+    try:
+        await _call_daemon_api_async(config, "POST", "/hub/shutdown")
+    except HubServiceError as exc:
+        return _service_error_response("shutdown hub manager", exc)
+
+    return HubServiceActionResponse(
+        status="ok",
+        action="stop",
+        message="Shutdown requested",
+        details={},
+    )
 
 
 async def _hub_model_service_action(
     raw_request: Request,
     model_name: str,
-    action: Literal["start-model", "stop-model"],
+    action: Literal["start", "stop"],
 ) -> HubModelActionResponse | JSONResponse:
     """Execute a load or unload action on a model via the hub service.
 
@@ -1619,7 +1741,7 @@ async def _hub_model_service_action(
         The incoming FastAPI request.
     model_name : str
         Name of the model to act on.
-    action : Literal["start-model", "stop-model"]
+    action : Literal["start", "stop"]
         The action to perform.
 
     Returns
@@ -1654,7 +1776,7 @@ async def _hub_model_service_action(
         return _service_error_response("reload before executing the model action", exc)
 
     try:
-        if action == "start-model":
+        if action == "start":
             await _call_daemon_api_async(config, "POST", f"/hub/models/{target}/start")
             message = f"Model '{target}' start requested"
         else:
@@ -1670,7 +1792,7 @@ async def _hub_model_service_action(
 async def _hub_memory_controller_action(
     raw_request: Request,
     model_name: str,
-    action: Literal["load-model", "unload-model"],
+    action: Literal["load", "unload"],
     payload: HubModelActionRequest | None,
 ) -> HubModelActionResponse | JSONResponse:
     """Execute a memory load/unload request using the in-process controller.
@@ -1681,7 +1803,7 @@ async def _hub_memory_controller_action(
         The incoming FastAPI request.
     model_name : str
         The name of the model to act on.
-    action : Literal["load-model", "unload-model"]
+    action : Literal["load", "unload"]
         The action to perform.
     payload : HubModelActionRequest or None
         Additional payload for the request.
@@ -1707,7 +1829,7 @@ async def _hub_memory_controller_action(
         return _controller_unavailable_response()
 
     try:
-        if action == "load-model":
+        if action == "load":
             await controller.load_model(target)
             message = f"Model '{target}' memory load requested"
         else:

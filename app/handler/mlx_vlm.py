@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, Generator
 import gc
 from http import HTTPStatus
 import time
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 import uuid
 
 from fastapi import HTTPException
@@ -38,6 +38,9 @@ from ..schemas.openai import (
 )
 from ..utils.errors import create_error_response
 from .parser import ParserFactory
+
+if TYPE_CHECKING:
+    from ..core.manager_protocol import ManagerProtocol  # noqa: F401
 
 
 class MLXVLMHandler:

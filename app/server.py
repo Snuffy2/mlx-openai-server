@@ -12,7 +12,7 @@ model unloading during idle periods to optimize resource usage.
 Key Components
 --------------
 LazyHandlerManager : Manages model handler lifecycle with optional JIT loading
-IdleAutoUnloadController : Background task for automatic model unloading
+CentralIdleAutoUnloadController : Central background task for automatic model unloading
 FastAPI Integration : REST API endpoints with OpenAI-compatible interface
 Memory Management : Periodic cleanup and MLX cache management
 
@@ -36,7 +36,7 @@ from pathlib import Path
 import socket
 import sys
 import time
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +49,7 @@ import uvicorn
 from .api.endpoints import router
 from .config import MLXServerConfig
 from .const import DEFAULT_API_HOST, DEFAULT_BIND_HOST
+from .core.manager_protocol import ManagerProtocol
 from .core.model_registry import ModelRegistry
 from .handler import MFLUX_AVAILABLE, MLXFluxHandler
 from .handler.mlx_embeddings import MLXEmbeddingsHandler
@@ -296,7 +297,7 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
         return handler
 
 
-class LazyHandlerManager:
+class LazyHandlerManager(ManagerProtocol):
     """Manage handler lifecycle with optional JIT loading and unloading."""
 
     _handler: MLXHandler | None
@@ -466,6 +467,66 @@ class LazyHandlerManager:
         self._shutdown = True
         await self.unload("shutdown")
 
+    # ManagerProtocol adapter methods -------------------------------------------------
+    def is_vram_loaded(self) -> bool:
+        """Return True when the handler is currently loaded into memory/VRAM."""
+        return self._handler is not None
+
+    async def ensure_vram_loaded(
+        self, *, force: bool = False, timeout: float | None = None
+    ) -> None:
+        """Ensure the handler is loaded (idempotent).
+
+        Maps the ManagerProtocol call onto the existing ``ensure_loaded`` behavior.
+        """
+        if self._shutdown:
+            raise RuntimeError("Manager is shutting down")
+
+        if not self._handler or force:
+            coro = self.ensure_loaded("ensure_vram")
+            if timeout is not None:
+                await asyncio.wait_for(coro, timeout=timeout)
+            else:
+                await coro
+
+    async def release_vram(self, *, timeout: float | None = None) -> None:
+        """Release VRAM resources by unloading the handler (idempotent)."""
+        coro = self.unload("release_vram")
+        if timeout is not None:
+            await asyncio.wait_for(coro, timeout=timeout)
+        else:
+            await coro
+
+    def request_session(
+        self, *, ensure_vram: bool = True, ensure_timeout: float | None = None
+    ) -> AbstractAsyncContextManager[Any]:
+        """Return an async context manager for per-request sessions.
+
+        This adapter notifies activity and optionally ensures VRAM before yielding
+        the manager (self). It is intentionally lightweight because the
+        authoritative active-request counter lives in `ModelRegistry`.
+        """
+
+        @asynccontextmanager
+        async def _session() -> AsyncGenerator[Any, None]:
+            # Record activity so central controller timers are reset
+            self.record_activity()
+
+            if ensure_vram:
+                coro = self.ensure_vram_loaded(timeout=ensure_timeout)
+                if ensure_timeout is not None:
+                    await asyncio.wait_for(coro, timeout=ensure_timeout)
+                else:
+                    await coro
+
+            try:
+                yield self
+            finally:
+                # Mark activity on exit (helps with last-activity heuristics)
+                self.record_activity()
+
+        return _session()
+
     def _format_log_message(self, action: str, reason: str) -> str:
         """Format a log message with model identifier.
 
@@ -506,56 +567,35 @@ class LazyHandlerManager:
         task.add_done_callback(_on_complete)
 
 
-class IdleAutoUnloadController:
-    """Background helper that unloads handlers after idle periods."""
+class CentralIdleAutoUnloadController:
+    """Central controller that monitors `ModelRegistry` and unloads idle models.
 
-    WATCH_LOOP_MAX_WAIT_SECONDS = 10
+    The controller scans registered models and triggers `registry.request_vram_unload`
+    when a model's idle period exceeds its configured auto-unload timeout and the
+    model has no active requests.
+    """
 
-    def __init__(self, handler_manager: LazyHandlerManager) -> None:
-        """Initialize the IdleAutoUnloadController.
+    WATCH_LOOP_MAX_WAIT_SECONDS = 5
 
-        Parameters
-        ----------
-        handler_manager : LazyHandlerManager
-            The handler manager to monitor for idle periods.
-        """
-        self.handler_manager = handler_manager
+    def __init__(self, registry: ModelRegistry) -> None:
+        self.registry = registry
         self._event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._active = False
-
-    @property
-    def auto_unload_minutes(self) -> int | None:
-        """Expose auto-unload configuration for logging."""
-        return self.handler_manager.auto_unload_minutes
+        # Per-model backoff map (model_id -> next_allowed_time)
+        self._backoff: dict[str, float] = {}
 
     def start(self) -> None:
-        """Start the auto-unload background task if configured.
-
-        Starts the background task that monitors for idle periods and
-        automatically unloads handlers when the configured timeout is
-        exceeded. Only starts if JIT is enabled and auto-unload is
-        configured.
-        """
-        if not self.handler_manager.jit_enabled:
-            return
-        if self.handler_manager.auto_unload_minutes is None:
-            return
+        """Start the central idle auto-unload background task."""
         if self._active:
             return
-
         self._active = True
         self._task = asyncio.create_task(self._watch_loop())
 
     async def stop(self) -> None:
-        """Stop the auto-unload background task.
-
-        Cancels the background monitoring task and waits for it to
-        complete. Safe to call multiple times.
-        """
+        """Stop the controller and wait for background task to finish."""
         if not self._active:
             return
-
         self._active = False
         self._event.set()
         if self._task:
@@ -563,57 +603,99 @@ class IdleAutoUnloadController:
             with suppress(asyncio.CancelledError):
                 await self._task
 
-    def notify_activity(self) -> None:
-        """Notify the background task of recent activity.
+    def notify_activity(self, model_id: str) -> None:
+        """Called by the registry when activity occurs or when a model becomes idle.
 
-        Signals the background monitoring task that activity has
-        occurred, resetting the idle timeout counter.
+        The controller uses this to reset timers and wake the watch loop.
         """
+        # Wake the loop; controller will query registry for current state
         if self._active:
             self._event.set()
 
     async def _watch_loop(self) -> None:
-        """Background loop that monitors for idle periods and unloads handlers.
-
-        Runs continuously while active, awaiting activity notifications or
-        idle timeouts. When the idle timeout is exceeded without activity,
-        automatically unloads the current handler to free memory.
-        """
         try:
             while self._active:
-                timeout = self.handler_manager.idle_timeout_seconds()
-                if timeout is None:
-                    break
-
-                if not self.handler_manager.current_handler:
-                    try:
-                        await asyncio.wait_for(
-                            self._event.wait(), timeout=self.WATCH_LOOP_MAX_WAIT_SECONDS
-                        )
-                    except TimeoutError:
-                        continue
-                    else:
-                        self._event.clear()
-                        continue
-
-                idle_elapsed = self.handler_manager.seconds_since_last_activity()
-                idle_remaining = max(timeout - idle_elapsed, 0)
-                wait_duration = min(idle_remaining, self.WATCH_LOOP_MAX_WAIT_SECONDS)
-
-                if wait_duration <= 0:
-                    await self.handler_manager.unload(
-                        f"Idle for {self.auto_unload_minutes} minutes"
-                    )
+                # Iterate registered models and consider unloading
+                try:
+                    models = [m["id"] for m in self.registry.list_models()]
+                except Exception:
+                    await asyncio.sleep(self.WATCH_LOOP_MAX_WAIT_SECONDS)
                     continue
 
+                now = time.time()
+                # Keep the list_models payload so we can read per-model metadata
+                entries = self.registry.list_models()
+                for mid in models:
+                    # Skip if backoff in effect
+                    next_allowed = self._backoff.get(mid, 0)
+                    if now < next_allowed:
+                        continue
+
+                    try:
+                        status = self.registry.get_vram_status(mid)
+                    except KeyError:
+                        continue
+
+                    # active_requests prevents unload
+                    if status.get("active_requests", 0) > 0:
+                        continue
+
+                    handler = None
+                    try:
+                        handler = self.registry.get_handler(mid)
+                    except KeyError:
+                        handler = None
+
+                    # Determine auto-unload timeout (minutes) from handler or metadata
+                    minutes = None
+                    if handler is not None:
+                        minutes = getattr(handler, "auto_unload_minutes", None)
+                    if minutes is None:
+                        # Fall back to metadata extras if present
+                        try:
+                            meta: dict[str, Any] = next(
+                                (e.get("metadata", {}) for e in entries if e.get("id") == mid), {}
+                            )
+                            minutes = meta.get("auto_unload_minutes")
+                        except Exception:
+                            minutes = None
+
+                    if minutes is None:
+                        continue
+
+                    timeout_secs = int(minutes) * 60
+
+                    # If handler provides last-activity metric, use it
+                    idle_elapsed = None
+                    if handler is not None and hasattr(handler, "seconds_since_last_activity"):
+                        try:
+                            idle_elapsed = handler.seconds_since_last_activity()
+                        except Exception:
+                            idle_elapsed = None
+
+                    # If we don't have per-handler idle metric, derive from vram timestamps
+                    if idle_elapsed is None:
+                        last_unload = status.get("vram_last_unload_ts") or 0
+                        last_load = status.get("vram_last_load_ts") or 0
+                        last_activity_ts = max(last_load, last_unload)
+                        idle_elapsed = max(0, now - float(last_activity_ts))
+
+                    if idle_elapsed >= timeout_secs and status.get("vram_loaded", False):
+                        try:
+                            await self.registry.request_vram_unload(mid)
+                        except Exception:
+                            # On failure, backoff to avoid tight error loops
+                            self._backoff[mid] = time.time() + 30
+                            logger.exception(f"Failed to auto-unload model {mid}")
+
+                # Wait for activity or timeout
                 try:
-                    await asyncio.wait_for(self._event.wait(), timeout=wait_duration)
+                    await asyncio.wait_for(
+                        self._event.wait(), timeout=self.WATCH_LOOP_MAX_WAIT_SECONDS
+                    )
                 except TimeoutError:
-                    if self.handler_manager.seconds_since_last_activity() >= timeout:
-                        await self.handler_manager.unload(
-                            f"Idle for {self.auto_unload_minutes} minutes"
-                        )
-                else:
+                    pass
+                finally:
                     self._event.clear()
         except asyncio.CancelledError:
             pass
@@ -628,7 +710,7 @@ def create_lifespan(
     auto-unload functionality during application startup:
 
     - Creates a LazyHandlerManager to manage model loading/unloading
-    - Creates an IdleAutoUnloadController for automatic unloading when idle
+    - Creates a CentralIdleAutoUnloadController for automatic unloading when idle
     - If JIT is disabled, loads the handler immediately at startup
     - Starts the auto-unload background task if configured
     - Performs initial memory cleanup
@@ -665,7 +747,9 @@ def create_lifespan(
         """
 
         registry = ModelRegistry()
+        # Ensure external code can find the registry via the canonical name
         app.state.registry = registry
+        app.state.model_registry = registry
         registry_model_id = get_registry_model_id(config_args)
         base_registry_metadata = {
             "model_path": config_args.model_identifier,
@@ -733,9 +817,19 @@ def create_lifespan(
 
         handler_manager = LazyHandlerManager(config_args, on_change=_update_handler)
         app.state.handler_manager = handler_manager
-        auto_unload_controller = IdleAutoUnloadController(handler_manager)
-        app.state.auto_unload_controller = auto_unload_controller
-        handler_manager.set_activity_callback(auto_unload_controller.notify_activity)
+
+        # Central controller watches the ModelRegistry and can auto-unload any
+        # registered model when idle. Register the registry notifier so
+        # handler sessions and other registry-driven activity can reset timers.
+        central_controller = CentralIdleAutoUnloadController(registry)
+        registry.register_activity_notifier(central_controller.notify_activity)
+        app.state.idle_controller = central_controller
+
+        # Wire manager-level activity into the central controller so a single
+        # controller handles auto-unload decisions for all models.
+        handler_manager.set_activity_callback(
+            lambda: central_controller.notify_activity(registry_model_id)
+        )
 
         try:
             if not config_args.jit_enabled:
@@ -744,7 +838,7 @@ def create_lifespan(
             await handler_manager.shutdown()
             raise
 
-        auto_unload_controller.start()
+        central_controller.start()
 
         # Initial memory cleanup
         mx.clear_cache()
@@ -755,9 +849,9 @@ def create_lifespan(
         # Shutdown
         logger.info("Shutting down application")
         try:
-            await auto_unload_controller.stop()
+            await central_controller.stop()
         except Exception as e:
-            logger.error(f"Error stopping auto-unload controller. {type(e).__name__}: {e}")
+            logger.error(f"Error stopping central auto-unload controller. {type(e).__name__}: {e}")
 
         try:
             await handler_manager.shutdown()
@@ -920,6 +1014,11 @@ def configure_fastapi_app(app: FastAPI) -> None:
             # No hub config available; nothing to do
             pass
     app.include_router(router)
+    # Ensure a ModelRegistry is available on the application state so
+    # hub-aware endpoints and admin routes can access model metadata
+    # and request VRAM operations without requiring explicit wiring.
+    if not getattr(app.state, "model_registry", None):
+        app.state.model_registry = ModelRegistry()
     app.add_middleware(RequestTrackingMiddleware)
 
     app.add_middleware(

@@ -279,7 +279,7 @@ def test_hub_load_model_cli_calls_controller(
     )
 
     assert result.exit_code == 0
-    assert captured == [(("alpha", "beta"), "load-model")]
+    assert captured == [(("alpha", "beta"), "load")]
 
 
 def test_hub_unload_model_cli_surfaces_errors(

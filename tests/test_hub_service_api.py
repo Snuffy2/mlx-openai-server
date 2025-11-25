@@ -236,7 +236,7 @@ def test_hub_model_start_calls_service_client(
     client, state, _controller = hub_service_app
     state.available = True
 
-    response = client.post("/hub/models/alpha/start-model", json={})
+    response = client.post("/hub/models/alpha/start", json={})
 
     assert response.status_code == HTTPStatus.OK
     assert state.start_calls == ["alpha"]
@@ -250,7 +250,7 @@ def test_hub_model_start_surfaces_capacity_errors(
     client, state, _controller = hub_service_app
     state.available = True
 
-    response = client.post("/hub/models/saturated/start-model", json={})
+    response = client.post("/hub/models/saturated/start", json={})
 
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     body = response.json()
@@ -366,3 +366,65 @@ def test_hub_memory_actions_surface_controller_errors(
     response = client.post("/hub/models/missing/unload", json={})
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert controller.unloaded[-1] == "missing"
+
+
+def test_vram_admin_endpoints_invoke_registry(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
+) -> None:
+    """Admin VRAM endpoints should call the ModelRegistry on app.state."""
+
+    client, _state, _controller = hub_service_app
+
+    class _StubRegistry:
+        def __init__(self) -> None:
+            self.loaded: list[str] = []
+            self.unloaded: list[str] = []
+
+        async def request_vram_load(
+            self, name: str, *, force: bool = False, timeout: float | None = None
+        ) -> None:
+            if name == "denied":
+                # Simulate a validation error
+                raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="denied")
+            self.loaded.append(name)
+
+        async def request_vram_unload(self, name: str, *, timeout: float | None = None) -> None:
+            if name == "missing":
+                raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="not loaded")
+            self.unloaded.append(name)
+
+    registry = _StubRegistry()
+    client.app.state.model_registry = registry
+
+    response = client.post("/hub/models/alpha/vram/load", json={})
+    assert response.status_code == HTTPStatus.OK
+    assert registry.loaded == ["alpha"]
+
+    response = client.post("/hub/models/alpha/vram/unload", json={})
+    assert response.status_code == HTTPStatus.OK
+    assert registry.unloaded == ["alpha"]
+
+
+def test_vram_admin_endpoints_surface_registry_errors(
+    hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
+) -> None:
+    """Registry errors should propagate as HTTP responses from the VRAM endpoints."""
+
+    client, _state, _controller = hub_service_app
+
+    class _StubRegistryErr:
+        async def request_vram_load(
+            self, name: str, *, force: bool = False, timeout: float | None = None
+        ) -> None:
+            raise HTTPException(status_code=HTTPStatus.TOO_MANY_REQUESTS, detail="group busy")
+
+        async def request_vram_unload(self, name: str, *, timeout: float | None = None) -> None:
+            raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="not loaded")
+
+    client.app.state.model_registry = _StubRegistryErr()
+
+    response = client.post("/hub/models/denied/vram/load", json={})
+    assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+
+    response = client.post("/hub/models/missing/vram/unload", json={})
+    assert response.status_code == HTTPStatus.BAD_REQUEST

@@ -512,7 +512,7 @@ def _require_service_client(config: MLXHubConfig) -> bool:
 def _perform_memory_action_request(
     config: MLXHubConfig,
     model_name: str,
-    action: Literal["load-model", "unload-model"],
+    action: Literal["load", "unload"],
 ) -> tuple[bool, str]:
     """Perform a memory action request to the hub controller.
 
@@ -522,7 +522,7 @@ def _perform_memory_action_request(
         The hub configuration.
     model_name : str
         The name of the model.
-    action : Literal["load-model", "unload-model"]
+    action : Literal["load", "unload"]
         The action to perform.
 
     Returns
@@ -550,7 +550,7 @@ def _perform_memory_action_request(
 def _run_memory_actions(
     config: MLXHubConfig,
     model_names: Iterable[str],
-    action: Literal["load-model", "unload-model"],
+    action: Literal["load", "unload"],
 ) -> None:
     """Run memory actions for multiple models.
 
@@ -560,7 +560,7 @@ def _run_memory_actions(
         The hub configuration.
     model_names : Iterable[str]
         The names of the models.
-    action : Literal["load-model", "unload-model"]
+    action : Literal["load", "unload"]
         The action to perform.
 
     Raises
@@ -1163,6 +1163,8 @@ def hub_start_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    if not model_names or all(not str(n).strip() for n in model_names):
+        raise click.UsageError("Missing argument 'MODEL_NAMES'.")
     try:
         _call_daemon_api(config, "POST", "/hub/reload")
     except click.ClickException as exc:
@@ -1195,6 +1197,8 @@ def hub_stop_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
+    if not model_names or all(not str(n).strip() for n in model_names):
+        raise click.UsageError("Missing argument 'MODEL_NAMES'.")
     try:
         _call_daemon_api(config, "POST", "/hub/reload")
     except click.ClickException as exc:
@@ -1219,7 +1223,7 @@ def hub_load_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger controller-backed memory loads for the provided models."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
-    _run_memory_actions(config, model_names, "load-model")
+    _run_memory_actions(config, model_names, "load")
 
 
 @hub.command(name="unload-model", help="Unload handlers for one or more models from memory")
@@ -1229,7 +1233,7 @@ def hub_unload_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """Trigger controller-backed memory unloads for the provided models."""
 
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
-    _run_memory_actions(config, model_names, "unload-model")
+    _run_memory_actions(config, model_names, "unload")
 
 
 @hub.command(name="watch", help="Continuously print live hub manager status")

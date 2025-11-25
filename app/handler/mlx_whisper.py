@@ -15,7 +15,7 @@ from http import HTTPStatus
 from pathlib import Path
 import tempfile
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 import uuid
 
 from fastapi import HTTPException, UploadFile
@@ -33,6 +33,9 @@ from ..schemas.openai import (
     TranscriptionUsageAudio,
 )
 from ..utils.errors import create_error_response
+
+if TYPE_CHECKING:
+    from ..core.manager_protocol import ManagerProtocol  # noqa: F401
 
 
 class MLXWhisperHandler:
