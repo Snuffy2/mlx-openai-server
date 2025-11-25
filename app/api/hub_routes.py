@@ -1299,6 +1299,24 @@ async def hub_status_page(raw_request: Request) -> HTMLResponse:
             detail="Hub status page is disabled in configuration.",
         )
 
+    # Prefer the daemon's rendered status page when the daemon is available
+    try:
+        config = _load_hub_config_from_request(raw_request)
+    except HubConfigError:
+        # Fall back to the inline page when config missing
+        return HTMLResponse(content=_HUB_STATUS_PAGE_HTML, media_type="text/html")
+
+    try:
+        base = _daemon_base_url(config)
+        url = f"{base.rstrip('/')}/hub"
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get(url)
+            if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", ""):
+                return HTMLResponse(content=resp.text, media_type="text/html")
+    except Exception:
+        # If daemon is unreachable or returns non-HTML, fall back to inline page
+        pass
+
     return HTMLResponse(content=_HUB_STATUS_PAGE_HTML, media_type="text/html")
 
 

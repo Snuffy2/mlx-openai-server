@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+import datetime
+import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import time
@@ -60,12 +63,8 @@ class UpperChoice(click.Choice[str]):
             Raw value supplied by the user (may be ``None``).
         ctx:
             Click context object (unused here but part of the API).
-
-        Returns
-        -------
-        str | None
-            Canonical matching choice, or ``None`` if ``choice`` is ``None``.
         """
+
         if choice is None:
             return None
         upperchoice = choice.upper()
@@ -140,9 +139,82 @@ def _controller_base_url(config: MLXHubConfig) -> str:
     The daemon host/port values are read from the hub config. This helper
     centralizes where the CLI constructs the daemon base URL.
     """
+    # Prefer runtime state file (written by `hub start`) when available
+    runtime = _read_hub_runtime_state(config)
+    if runtime:
+        host = runtime.get("host") or (config.host or DEFAULT_BIND_HOST)
+        port = runtime.get("daemon_port") or config.daemon_port
+        return f"http://{host}:{port}"
+
     host = config.host or DEFAULT_BIND_HOST
     port = config.daemon_port
     return f"http://{host}:{port}"
+
+
+def _runtime_state_path(config: MLXHubConfig) -> Path:
+    """Return path for the transient runtime state file under the configured log path."""
+    try:
+        log_dir = (
+            Path(config.log_path) if getattr(config, "log_path", None) else Path.cwd() / "logs"
+        )
+    except Exception:
+        log_dir = Path.cwd() / "logs"
+    return log_dir / "hub_runtime.json"
+
+
+def _write_hub_runtime_state(config: MLXHubConfig, pid: int, daemon_port: int) -> None:
+    """Persist transient runtime info so other CLI commands can find the running daemon.
+
+    The file is intentionally lightweight and not used for durable configuration.
+    """
+    path = _runtime_state_path(config)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "pid": int(pid),
+            "daemon_port": int(daemon_port),
+            "host": config.host or "127.0.0.1",
+            "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+        path.write_text(json.dumps(payload))
+        logger.debug(f"Wrote hub runtime state to {path}")
+    except Exception as exc:  # pragma: no cover - best-effort logging
+        logger.warning(f"Failed to write hub runtime state to {path}: {exc}")
+
+
+def _read_hub_runtime_state(config: MLXHubConfig) -> dict[str, object] | None:
+    """Return runtime state dict if valid and the process appears alive, otherwise None."""
+    path = _runtime_state_path(config)
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text())
+        pid = int(data.get("pid"))
+        port = int(data.get("daemon_port"))
+        host = data.get("host") or "127.0.0.1"
+    except Exception:
+        return None
+
+    # Check PID alive (best-effort)
+    pid_alive = False
+    try:
+        # os.kill with signal 0 raises OSError if process does not exist
+        os.kill(pid, 0)
+        pid_alive = True
+    except Exception:
+        pid_alive = False
+
+    if not pid_alive:
+        return None
+
+    # Quick port check on localhost
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            pass
+    except Exception:
+        return None
+
+    return {"pid": pid, "daemon_port": port, "host": host}
 
 
 def _call_daemon_api(
@@ -268,8 +340,10 @@ def _print_hub_status(
         else:
             state_display = state
 
-        # Loaded in memory - approximate with process state since runtime not available in CLI
-        loaded_in_memory = "yes" if state == "running" else "no"
+        # Loaded in memory: prefer explicit runtime flag when available,
+        # otherwise approximate with process state.
+        memory_flag = (live or {}).get("memory_loaded")
+        loaded_in_memory = "yes" if (memory_flag or state == "running") else "no"
 
         # Auto-unload
         auto_unload = f"{model.auto_unload_minutes}min" if model.auto_unload_minutes else "-"
@@ -954,6 +1028,48 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
                 "You can also start it manually (for example):\n"
                 f"  uvicorn app.hub.daemon:create_app --host {host_val} --port {port_val}"
             ) from None
+        # Persist runtime state for other CLI invocations to find this daemon
+        try:
+            _write_hub_runtime_state(config, proc.pid, int(port_val))
+        except Exception:
+            # Best-effort; do not fail start if writing runtime state fails
+            logger.debug("Failed to write hub runtime state after start")
+
+        # After the daemon is running, attempt to start any models marked as default
+        try:
+            # Refresh the controller state so it sees the latest config
+            _call_daemon_api(config, "POST", "/hub/reload")
+            for model in config.models:
+                try:
+                    if not getattr(model, "is_default_model", False):
+                        continue
+                    name = model.name
+                    jit = bool(getattr(model, "jit_enabled", False))
+                    click.echo(f"Requesting process start for default model: {name}")
+                    try:
+                        _call_daemon_api(
+                            config, "POST", f"/hub/models/{quote(str(name), safe='')}/start"
+                        )
+                        _flash(f"{name}: start requested", tone="success")
+                    except click.ClickException as exc_start:
+                        # If start failed and the model is non-JIT, fall back
+                        # to requesting a memory load so the configured default
+                        # ends up available in the controller view.
+                        if not jit:
+                            try:
+                                _call_daemon_api(
+                                    config, "POST", f"/hub/models/{quote(str(name), safe='')}/load"
+                                )
+                                _flash(f"{name}: memory load requested (fallback)", tone="success")
+                            except click.ClickException as exc_load:
+                                _flash(f"{name}: load failed ({exc_load})", tone="error")
+                        else:
+                            _flash(f"{name}: start failed ({exc_start})", tone="error")
+                except Exception as exc:  # pragma: no cover - best-effort
+                    logger.debug(f"Error while auto-starting default model: {exc}")
+        except Exception:
+            # Ignore failures here; user can start models manually
+            pass
 
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
     if config.enable_status_page:
