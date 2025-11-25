@@ -250,6 +250,8 @@ def _print_hub_status(
                 live_lookup[name] = entry
 
     click.echo("Models:")
+    headers = ["NAME", "STATE", "LOADED", "AUTO-UNLOAD", "TYPE", "GROUP", "DEFAULT", "MODEL"]
+    rows: list[dict[str, str]] = []
     for model in configured:
         name = model.name or "<unnamed>"
         live = live_lookup.get(name)
@@ -284,9 +286,37 @@ def _print_hub_status(
         # Model path
         model_path = model.model_path
 
-        click.echo(
-            f"  - {name} | {state_display} | {loaded_in_memory} | {auto_unload} | {model_type} | {group} | {default} | {model_path}"
+        rows.append(
+            {
+                "NAME": name,
+                "STATE": state_display,
+                "LOADED": loaded_in_memory,
+                "AUTO-UNLOAD": auto_unload,
+                "TYPE": model_type,
+                "GROUP": group,
+                "DEFAULT": default,
+                "MODEL": model_path,
+            }
         )
+
+    # Calculate column widths
+    widths: dict[str, int] = {header: len(header) for header in headers}
+    for row in rows:
+        for header in headers:
+            widths[header] = max(widths[header], len(row[header]))
+
+    # Print header
+    header_line = "  " + " | ".join(header.ljust(widths[header]) for header in headers)
+    click.echo(header_line)
+
+    # Print divider
+    divider = "  " + "-+-".join("-" * widths[header] for header in headers)
+    click.echo(divider)
+
+    # Print rows
+    for row in rows:
+        row_line = "  " + " | ".join(row[header].ljust(widths[header]) for header in headers)
+        click.echo(row_line)
 
 
 _FLASH_STYLES: dict[str, tuple[str, str]] = {
@@ -877,6 +907,12 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
         click.echo("Starting hub manager...")
         host_val = config.host or DEFAULT_BIND_HOST
         port_val = str(config.daemon_port)
+
+        # Set environment variable for daemon to use the same config
+        env = os.environ.copy()
+        if config.source_path:
+            env["MLX_HUB_CONFIG_PATH"] = str(config.source_path)
+
         cmd = [
             sys.executable,  # Use the same Python executable
             "-m",
@@ -894,7 +930,7 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env=os.environ.copy(),
+                env=env,
                 cwd=Path.cwd(),
             )
             click.echo(f"Hub manager process started (PID: {proc.pid})")
@@ -921,7 +957,8 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
     if config.enable_status_page:
-        click.echo(f"Browse to http://{config.host}:{config.port}/hub for the status dashboard")
+        host_display = "localhost" if config.host == "0.0.0.0" else config.host
+        click.echo(f"Browse to http://{host_display}:{config.daemon_port}/hub for the status dashboard")
 
     snapshot = None
     try:

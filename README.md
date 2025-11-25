@@ -865,7 +865,7 @@ mlx-openai-server hub status
 mlx-openai-server hub start-model alpha
 
 # Load handlers into memory via the hub
-mlx-openai-server hub load-model alpha --reason dashboard
+mlx-openai-server hub load-model alpha
 
 # Reload hub config through the hub
 mlx-openai-server hub reload
