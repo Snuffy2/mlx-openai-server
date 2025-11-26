@@ -566,7 +566,13 @@ def get_running_hub_models(raw_request: Request) -> set[str] | None:
         name = entry.get("name")
         state = str(entry.get("state") or "").lower()
         if isinstance(name, str) and state == "running":
-            running.add(name)
+            # Find the model_path for this name
+            for model in getattr(config, "models", []):
+                if getattr(model, "name", None) == name:
+                    model_path = getattr(model, "model_path", None)
+                    if model_path:
+                        running.add(model_path)
+                    break
 
     return running
 

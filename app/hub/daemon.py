@@ -155,7 +155,7 @@ class HubSupervisor:
                 )
                 record.manager = LazyHandlerManager(cfg)
                 if self.registry:
-                    await self.registry.update_model_state(name, handler=record.manager)
+                    await self.registry.update_model_state(record.model_path, handler=record.manager)
 
             await record.manager.ensure_loaded("start")
             record.memory_loaded = True
@@ -460,7 +460,9 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     registry = ModelRegistry()
     app.state.registry = registry
     for model in getattr(hub_config, "models", []):
-        model_id = getattr(model, "name", str(model))
+        model_id = getattr(model, "model_path", None)
+        if model_id is None:
+            raise ValueError(f"Model {model} has no model_path")
         registry.register_model(
             model_id=model_id,
             handler=None,  # Will be set when started
