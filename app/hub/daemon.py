@@ -18,7 +18,7 @@ import socket
 import time
 from typing import Any, cast
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from loguru import logger
@@ -27,6 +27,8 @@ from ..config import MLXServerConfig
 from ..const import (
     DEFAULT_API_HOST,
     DEFAULT_AUTO_UNLOAD_MINUTES,
+    DEFAULT_GROUP,
+    DEFAULT_IS_DEFAULT_MODEL,
     DEFAULT_JIT_ENABLED,
     DEFAULT_MODEL_TYPE,
     DEFAULT_PORT,
@@ -274,18 +276,37 @@ class HubSupervisor:
         models_list = list(getattr(new_hub, "models", []))
 
         async with self._lock:
+            # Preserve existing records
+            old_models = dict(self._models)
             self.hub_config = new_hub
             self._models = {}
             for model in models_list:
                 name = getattr(model, "name", None) or str(model)
-                record = ModelRecord(
-                    name=name,
-                    config=model,
-                    group=getattr(model, "group", None),
-                    is_default=getattr(model, "is_default_model", False),
-                    model_path=getattr(model, "model_path", None),
-                    auto_unload_minutes=getattr(model, "auto_unload_minutes", None),
-                )
+                # Preserve existing record if it exists
+                existing_record = old_models.get(name)
+                if existing_record:
+                    # Update config but keep manager and loaded state
+                    existing_record.config = model
+                    existing_record.group = getattr(model, "group", DEFAULT_GROUP)
+                    existing_record.is_default = getattr(
+                        model, "is_default_model", DEFAULT_IS_DEFAULT_MODEL
+                    )
+                    existing_record.model_path = getattr(model, "model_path", None)
+                    existing_record.auto_unload_minutes = getattr(
+                        model, "auto_unload_minutes", DEFAULT_AUTO_UNLOAD_MINUTES
+                    )
+                    record = existing_record
+                else:
+                    record = ModelRecord(
+                        name=name,
+                        config=model,
+                        group=getattr(model, "group", DEFAULT_GROUP),
+                        is_default=getattr(model, "is_default_model", DEFAULT_IS_DEFAULT_MODEL),
+                        model_path=getattr(model, "model_path", None),
+                        auto_unload_minutes=getattr(
+                            model, "auto_unload_minutes", DEFAULT_AUTO_UNLOAD_MINUTES
+                        ),
+                    )
                 self._models[name] = record
 
             logger.info(f"Reloaded hub config: started={started} stopped={stopped}")
@@ -467,10 +488,15 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         return await supervisor.reload_config()
 
     @app.post("/hub/shutdown")
-    async def hub_shutdown(background_tasks: BackgroundTasks, request: Request) -> dict[str, str]:
-        supervisor = cast("HubSupervisor", request.app.state.supervisor)
-        background_tasks.add_task(supervisor.shutdown_all)
-        return {"status": "shutdown_scheduled"}
+    async def hub_shutdown() -> dict[str, Any]:
+        """Shutdown all supervised models."""
+        await supervisor.shutdown_all()
+        return {
+            "status": "ok",
+            "action": "stop",
+            "message": "Shutdown requested",
+            "details": {},
+        }
 
     @app.post("/hub/models/{name}/start")
     async def model_start(name: str, request: Request) -> dict[str, Any]:

@@ -307,7 +307,7 @@ def _print_hub_status(
     live_lookup: dict[str, dict[str, Any]] = {}
     if live_status:
         for entry in live_status.get("models", []):
-            name = entry.get("name")
+            name = entry.get("name")  # Model objects have "name"
             if isinstance(name, str):
                 live_lookup[name] = entry
 

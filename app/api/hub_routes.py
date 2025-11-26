@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from http import HTTPStatus
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -1117,6 +1118,13 @@ async def hub_shutdown(
         controller = getattr(raw_request.app.state, "supervisor", None)
     if controller is not None:
         background_tasks.add_task(controller.shutdown_all)
+
+        # Schedule server shutdown after model shutdown
+        async def shutdown_server() -> None:
+            await asyncio.sleep(1)  # Give time for response to be sent
+            os._exit(0)
+
+        background_tasks.add_task(shutdown_server)
         return HubServiceActionResponse(
             status="ok",
             action="stop",
