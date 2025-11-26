@@ -307,7 +307,7 @@ def _print_hub_status(
     live_lookup: dict[str, dict[str, Any]] = {}
     if live_status:
         for entry in live_status.get("models", []):
-            name = entry.get("name")  # Model objects have "name"
+            name = entry.get("id")  # Model objects have "id"
             if isinstance(name, str):
                 live_lookup[name] = entry
 
@@ -317,9 +317,10 @@ def _print_hub_status(
     for model in configured:
         name = model.name or "<unnamed>"
         live = live_lookup.get(name)
-        state = (live or {}).get("state", "inactive")
-        pid = (live or {}).get("pid")
-        port = (live or {}).get("port") or model.port
+        metadata = (live or {}).get("metadata", {})
+        state = metadata.get("process_state", "inactive")
+        pid = metadata.get("pid")
+        port = metadata.get("port") or model.port
 
         # Format state with pid and port if running
         if state == "running" and pid is not None:
@@ -332,8 +333,8 @@ def _print_hub_status(
 
         # Loaded in memory: prefer explicit runtime flag when available,
         # otherwise approximate with process state.
-        memory_flag = (live or {}).get("memory_loaded")
-        loaded_in_memory = "yes" if (memory_flag or state == "running") else "no"
+        memory_flag = metadata.get("memory_state") == "loaded"
+        loaded_in_memory = "yes" if memory_flag else "no"
 
         # Auto-unload
         auto_unload = f"{model.auto_unload_minutes}min" if model.auto_unload_minutes else "-"

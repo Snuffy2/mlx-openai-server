@@ -148,8 +148,10 @@ class ModelRegistry:
         """
 
         async with self._lock:
-            if model_id not in self._handlers:
+            if model_id not in self._metadata:
                 raise KeyError(f"Model '{model_id}' not found in registry")
+
+            entry = self._extra.setdefault(model_id, {})
 
             if handler is not _UNSET:
                 # Handler may be ``object`` when the sentinel _UNSET is allowed;
@@ -158,8 +160,22 @@ class ModelRegistry:
                 if handler is not None:
                     # refresh created_at to indicate new attachment
                     self._metadata[model_id].created_at = int(time.time())
+                    # Update vram_loaded status
+                    try:
+                        loaded = bool(getattr(handler, "is_vram_loaded", lambda: False)())
+                    except Exception:
+                        loaded = False
+                    entry["vram_loaded"] = loaded
+                    if loaded:
+                        entry["vram_last_load_ts"] = int(time.time())
+                    else:
+                        entry.pop("vram_last_load_ts", None)
+                    entry["status"] = "loaded" if loaded else "unloaded"
+                else:
+                    # Handler detached
+                    entry["vram_loaded"] = False
+                    entry.pop("vram_last_load_ts", None)
 
-            entry = self._extra.setdefault(model_id, {})
             if metadata_updates:
                 entry.update(metadata_updates)
             if status is not None:

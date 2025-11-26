@@ -479,18 +479,23 @@ def _build_models_from_config(
     created_ts = _model_created_timestamp(config)
     rendered: list[Model] = []
     process_running = 0
-    memory_loaded = 0
+    memory_loaded_count = 0
     for server_cfg in config.models:
         name = server_cfg.name or server_cfg.model_identifier
         live = live_entries.get(name, {})
         state = str(live.get("state") or "inactive").lower()
-        memory_state = None
+        if "memory_loaded" in live:
+            memory_loaded = live["memory_loaded"]
+            memory_state = "loaded" if memory_loaded else "unloaded"
+        else:
+            memory_loaded = state == "running"
+            memory_state = None
         if state == "running":
             process_running += 1
-        if memory_state == "loaded":
-            memory_loaded += 1
+        if memory_loaded:
+            memory_loaded_count += 1
         metadata = {
-            "status": memory_state or state,
+            "status": state,
             "process_state": state,
             "memory_state": memory_state,
             "group": server_cfg.group,
@@ -515,7 +520,7 @@ def _build_models_from_config(
             )
         )
 
-    loaded_count = process_running
+    loaded_count = memory_loaded_count
     counts = HubStatusCounts(
         registered=len(rendered),
         started=process_running,

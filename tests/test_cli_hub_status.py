@@ -29,7 +29,27 @@ def test_print_hub_status_includes_live_state(
 ) -> None:
     """_print_hub_status should surface live state and PIDs when provided."""
 
-    live = {"models": [{"name": "alpha", "state": "running", "pid": 4321, "group": "tier"}]}
+    # Simulate the Model objects returned by the hub_status API
+    live = {
+        "models": [
+            {
+                "id": "alpha",
+                "object": "model",
+                "created": 1234567890,
+                "owned_by": "hub",
+                "metadata": {
+                    "status": "running",
+                    "process_state": "running",
+                    "memory_state": "loaded",
+                    "group": "tier",
+                    "default": False,
+                    "model_type": "lm",
+                    "model_path": "/models/a",
+                    "pid": 4321,
+                },
+            }
+        ]
+    }
     _print_hub_status(hub_config, live_status=live)
     output = capsys.readouterr().out
     assert "running" in output

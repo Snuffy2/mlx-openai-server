@@ -162,7 +162,7 @@ async def test_model_start_already_loaded_returns_early(
 
 @pytest.mark.asyncio
 async def test_model_stop_unloads_and_clears_state(hub_config_with_defaults: MLXHubConfig) -> None:
-    """Test that stopping a model unloads it and clears the loaded state."""
+    """Test that stopping a model unloads it and clears the manager."""
     supervisor = _TestHubSupervisor(hub_config_with_defaults)
     record = supervisor._models["regular_model"]
     mock_manager = MagicMock()
@@ -175,8 +175,9 @@ async def test_model_stop_unloads_and_clears_state(hub_config_with_defaults: MLX
     assert result["status"] == "stopped"
     assert result["name"] == "regular_model"
 
-    # Verify unload was called
+    # Verify unload was called and manager was cleared
     mock_manager.unload.assert_called_once_with("stop")
+    assert record.manager is None
 
 
 @pytest.mark.asyncio
@@ -200,7 +201,6 @@ async def test_model_load_and_unload(hub_config_with_defaults: MLXHubConfig) -> 
     assert result["name"] == "regular_model"
 
     # Test unload
-    record = supervisor._models["regular_model"]
     mock_manager.unload = AsyncMock(return_value=True)
 
     result = await supervisor.unload_model("regular_model")

@@ -154,11 +154,13 @@ class HubSupervisor:
                     or getattr(record.config, "model_name", None),
                 )
                 record.manager = LazyHandlerManager(cfg)
-                if self.registry:
-                    await self.registry.update_model_state(record.model_path, handler=record.manager)
+                record.model_path = cfg.model_path
 
             await record.manager.ensure_loaded("start")
             record.memory_loaded = True
+            if self.registry:
+                assert record.model_path is not None
+                await self.registry.update_model_state(record.model_path, handler=record.manager)
             logger.info(f"Loaded model {name}")
             return {"status": "loaded", "name": name}
 
@@ -191,6 +193,7 @@ class HubSupervisor:
             unloaded = await record.manager.unload("stop")
             if unloaded:
                 logger.info(f"Unloaded model {name}")
+                record.manager = None  # Clear the manager so the model is fully stopped
                 return {"status": "stopped", "name": name}
             return {"status": "not_running", "name": name}
 
@@ -325,7 +328,7 @@ class HubSupervisor:
             "models": [],
         }
         for name, rec in self._models.items():
-            state = "running" if rec.manager and rec.manager.is_vram_loaded() else "stopped"
+            state = "running" if rec.manager else "stopped"
             snapshot["models"].append(
                 {
                     "name": name,

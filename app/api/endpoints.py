@@ -353,13 +353,42 @@ async def models(raw_request: Request) -> ModelsResponse | JSONResponse:
     """
     # Try registry first (Phase 1+), fall back to handler for backward compat
     registry = getattr(raw_request.app.state, "registry", None)
+    supervisor = getattr(raw_request.app.state, "supervisor", None)
     if registry is not None:
         try:
-            models_data = registry.list_models()
-            running_models = get_running_hub_models(raw_request)
+            running_models: list[str] | None = None
+            supervisor_status = None
+            if supervisor is not None:
+                # Hub daemon: get running models directly from supervisor
+                supervisor_status = supervisor.get_status()
+                running_models = [
+                    model["model_path"]
+                    for model in supervisor_status.get("models", [])
+                    if model.get("state") == "running" and model.get("model_path")
+                ]
+            else:
+                # Separate server: get running models from hub daemon
+                temp = get_running_hub_models(raw_request)
+                running_models = list(temp) if temp is not None else None
+
             if running_models is not None:
+                models_data = registry.list_models()
+                # Update vram_loaded from supervisor status if available
+                if supervisor_status is not None:
+                    memory_lookup = {
+                        model["model_path"]: model.get("memory_loaded", False)
+                        for model in supervisor_status.get("models", [])
+                        if model.get("model_path")
+                    }
+                    for model in models_data:
+                        model_path = model.get("id")
+                        if model_path in memory_lookup:
+                            model.setdefault("metadata", {})["vram_loaded"] = memory_lookup[
+                                model_path
+                            ]
                 models_data = [model for model in models_data if model.get("id") in running_models]
-            return ModelsResponse(object="list", data=[Model(**model) for model in models_data])
+                return ModelsResponse(object="list", data=[Model(**model) for model in models_data])
+            # If running_models is None, fall through to handler fallback
         except Exception as e:
             logger.error(f"Error retrieving models from registry. {type(e).__name__}: {e}")
             return JSONResponse(
@@ -380,14 +409,8 @@ async def models(raw_request: Request) -> ModelsResponse | JSONResponse:
     if error is not None:
         return error
     if handler is None:
-        return JSONResponse(
-            content=create_error_response(
-                "Model handler not initialized",
-                "service_unavailable",
-                HTTPStatus.SERVICE_UNAVAILABLE,
-            ),
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-        )
+        # No handler available (e.g., hub mode with no running hub), return empty list
+        return ModelsResponse(object="list", data=[])
 
     try:
         models_data = await handler.get_models()
