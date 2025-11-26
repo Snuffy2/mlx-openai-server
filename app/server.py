@@ -30,10 +30,6 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 import gc
 from http import HTTPStatus
-import json
-import os
-from pathlib import Path
-import socket
 import sys
 import time
 from typing import Any, TypeAlias
@@ -48,7 +44,6 @@ import uvicorn
 
 from .api.endpoints import router
 from .config import MLXServerConfig
-from .const import DEFAULT_API_HOST, DEFAULT_BIND_HOST
 from .core.manager_protocol import ManagerProtocol
 from .core.model_registry import ModelRegistry
 from .handler import MFLUX_AVAILABLE, MLXFluxHandler
@@ -56,8 +51,6 @@ from .handler.mlx_embeddings import MLXEmbeddingsHandler
 from .handler.mlx_lm import MLXLMHandler
 from .handler.mlx_vlm import MLXVLMHandler
 from .handler.mlx_whisper import MLXWhisperHandler
-from .hub.config import HubConfigError, load_hub_config
-from .hub.proxy import proxy_router
 from .middleware import RequestTrackingMiddleware
 from .version import __version__
 
@@ -759,7 +752,7 @@ def create_lifespan(
             "auto_unload_minutes": config_args.auto_unload_minutes,
             "group": config_args.group,
         }
-        await registry.register_model(
+        registry.register_model(
             model_id=registry_model_id,
             handler=None,
             model_type=config_args.model_type,
@@ -943,76 +936,6 @@ def configure_fastapi_app(app: FastAPI) -> None:
     expose identical middleware, routing, and error handling behavior.
     """
 
-    # If a hub configuration path was provided via environment, set app state
-    # so hub-aware components can contact the daemon. We avoid replacing
-    # existing server_config and only add hub-specific state.
-    hub_config_path = os.environ.get("MLX_HUB_CONFIG_PATH")
-    if hub_config_path:
-        try:
-            cfg = load_hub_config(hub_config_path)
-            app.state.hub_config_path = Path(hub_config_path)
-            host_val = (cfg.host or DEFAULT_BIND_HOST).strip()
-            if host_val in {"0.0.0.0", "::", "[::]"}:
-                host_val = DEFAULT_API_HOST
-            if host_val.startswith("[") and host_val.endswith("]"):
-                host_val = host_val[1:-1]
-            if ":" in host_val and not host_val.startswith("["):
-                host_val = f"[{host_val}]"
-            app.state.hub_daemon_url = f"http://{host_val}:{cfg.daemon_port}"
-            app.state.server_config = cfg
-        except HubConfigError:
-            # If hub config cannot be loaded, don't block server startup;
-            # hub endpoints will surface config errors when invoked.
-            pass
-
-    # Register proxy router first so it can intercept /v1/* when running in hub mode
-    app.include_router(proxy_router)
-
-    # If no MLX_HUB_CONFIG_PATH was provided, attempt to discover a running
-    # hub daemon by reading the transient runtime state file under the
-    # default hub log path. This allows the main server (running on the
-    # configured `port`) to act as a gateway for the hub UI and OpenAI
-    # proxy when the hub daemon was started separately via `hub start`.
-    if not getattr(app.state, "hub_daemon_url", None):
-        try:
-            # Try to load default hub config to discover the hub log path
-            default_cfg = load_hub_config(None)
-            runtime_file = (
-                Path(getattr(default_cfg, "log_path", Path.cwd() / "logs")) / "hub_runtime.json"
-            )
-            if runtime_file.exists():
-                try:
-                    data = json.loads(runtime_file.read_text())
-                    pid = int(data.get("pid"))
-                    daemon_port = int(data.get("daemon_port"))
-                    host = data.get("host") or "127.0.0.1"
-
-                    # Check PID alive (best-effort)
-                    pid_alive = False
-                    try:
-                        os.kill(pid, 0)
-                        pid_alive = True
-                    except Exception:
-                        pid_alive = False
-
-                    # Quick port check on localhost
-                    port_open = False
-                    if pid_alive:
-                        try:
-                            with socket.create_connection((host, daemon_port), timeout=0.2):
-                                port_open = True
-                        except Exception:
-                            port_open = False
-
-                    if pid_alive and port_open:
-                        app.state.hub_daemon_url = f"http://{host}:{daemon_port}"
-                        app.state.server_config = default_cfg
-                except Exception:
-                    # Ignore malformed runtime files; fall through without hub state
-                    pass
-        except HubConfigError:
-            # No hub config available; nothing to do
-            pass
     app.include_router(router)
     # Ensure a ModelRegistry is available on the application state so
     # hub-aware endpoints and admin routes can access model metadata

@@ -67,7 +67,6 @@ class MLXHubConfig:
 
     host: str = DEFAULT_BIND_HOST
     port: int = DEFAULT_PORT
-    daemon_port: int = field(init=False)  # Dynamically allocated
     model_starting_port: int = DEFAULT_MODEL_STARTING_PORT
     log_level: str = DEFAULT_LOG_LEVEL
     log_path: Path = field(default_factory=lambda: DEFAULT_HUB_LOG_PATH)
@@ -380,27 +379,16 @@ def load_hub_config(
     hub.groups = _build_groups(data.get("groups"))
     group_lookup = {group.name: group for group in hub.groups}
 
-    # Allocate daemon port first (before models) to give it priority for lowest port
-    reserved_ports = {hub.port}  # Reserve main server port
-    daemon_port, next_auto_port = _allocate_port(
-        "hub-daemon",
-        hub.host,
-        hub.model_starting_port,
-        reserved_ports,
-    )
-    hub.daemon_port = daemon_port
-    reserved_ports.add(daemon_port)  # Reserve daemon port for model allocation
-
     hub.models = _build_models(
         raw_models=data.get("models"),
         base_host=hub.host,
         base_port=hub.port,
-        starting_port=next_auto_port,  # Start model allocation after daemon port
+        starting_port=hub.model_starting_port,  # Start model allocation from starting port
         base_log_level=hub.log_level,
         hub_log_path=hub.log_path,
         group_lookup=group_lookup,
         persisted_ports=persisted_ports,
-        additional_reserved_ports={daemon_port},
+        additional_reserved_ports=set(),
     )
 
     # Ensure all models inherit the hub's status page setting

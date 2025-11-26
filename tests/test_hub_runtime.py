@@ -7,11 +7,9 @@ cleanup behavior are verified together.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 from pathlib import Path
-import socket
 
 from fastapi.testclient import TestClient
 
@@ -23,24 +21,16 @@ from app.hub.daemon import create_app
 def test_hub_runtime_state_written_and_read(tmp_path: Path) -> None:
     """Writing runtime state should create the file and it should be readable.
 
-    The test binds a temporary listening socket on localhost to simulate a
-    running daemon port and uses the current process PID so the liveness
+    The test uses the current process PID so the liveness
     checks in `_read_hub_runtime_state` succeed.
     """
 
     # Configure a hub config that writes logs into the temporary directory
     config = MLXHubConfig(host="127.0.0.1", log_path=tmp_path)
 
-    # Create a listening socket so the quick port check passes
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
-    sock.listen(1)
-    port = sock.getsockname()[1]
-
     try:
-        # Write runtime state using current pid and the listening port
-        _write_hub_runtime_state(config, os.getpid(), port)
+        # Write runtime state using current pid
+        _write_hub_runtime_state(config, os.getpid())
 
         path = _runtime_state_path(config)
         assert path.exists(), "runtime file should be created"
@@ -48,16 +38,9 @@ def test_hub_runtime_state_written_and_read(tmp_path: Path) -> None:
         runtime = _read_hub_runtime_state(config)
         assert isinstance(runtime, dict)
         assert runtime["pid"] == os.getpid()
-        assert runtime["daemon_port"] == port
-
-        # Closing the listening socket should make the quick port check fail
-        sock.close()
-        after = _read_hub_runtime_state(config)
-        assert after is None, "runtime read should return None when port is closed"
+        assert runtime["host"] == "127.0.0.1"
     finally:
-        # Defensive cleanup
-        with contextlib.suppress(Exception):
-            sock.close()
+        pass
 
 
 def _write_hub_yaml(path: Path) -> Path:
@@ -83,7 +66,7 @@ def test_runtime_file_removed_on_shutdown(tmp_path: Path) -> None:
     yaml_path = _write_hub_yaml(tmp_path)
 
     runtime_file = tmp_path / "hub_runtime.json"
-    runtime_file.write_text(json.dumps({"pid": 1, "daemon_port": 12345, "host": "127.0.0.1"}))
+    runtime_file.write_text(json.dumps({"pid": 1, "host": "127.0.0.1"}))
 
     assert runtime_file.exists()
 

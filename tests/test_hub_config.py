@@ -96,7 +96,7 @@ def test_models_without_ports_receive_unique_offsets(tmp_path: Path) -> None:
     config = load_hub_config(hub_path)
 
     ports = [model.port for model in config.models]
-    assert ports == [47851, 47852]  # Daemon gets 47850, models start at 47851
+    assert ports == [47850, 47851]  # Models start at model_starting_port
 
 
 def test_models_honor_custom_starting_port(tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ def test_models_honor_custom_starting_port(tmp_path: Path) -> None:
     config = load_hub_config(hub_path)
 
     ports = [model.port for model in config.models]
-    assert ports == [60001, 60002]  # Daemon gets 60000, models start at 60001
+    assert ports == [60000, 60001]  # Models start at model_starting_port
 
 
 def test_starting_port_below_range_raises(tmp_path: Path) -> None:
@@ -223,12 +223,11 @@ def test_auto_port_skips_in_use_candidates(tmp_path: Path, monkeypatch: pytest.M
     )
 
     config = load_hub_config(hub_path)
-    assert [model.port for model in config.models] == [47852]  # Daemon gets 47851, model gets 47852
-    assert calls[:3] == [
+    assert [model.port for model in config.models] == [47851]  # Model gets 47851
+    assert calls == [
         47850,
         47851,
-        47852,
-    ]  # Daemon tries 47850 (busy), 47851 (free), model gets 47852
+    ]  # Tries 47850 (busy), 47851 (free), model gets 47851
 
 
 def test_explicit_port_in_use_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

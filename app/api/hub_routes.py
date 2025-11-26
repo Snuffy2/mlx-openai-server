@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any, Literal, cast
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 import httpx
@@ -174,7 +174,7 @@ def _daemon_base_url(config: MLXHubConfig) -> str:
         host = host[1:-1]
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    port = config.daemon_port
+    port = config.port
     return f"http://{host}:{port}"
 
 
@@ -644,13 +644,30 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
 
     warnings: list[str] = []
     snapshot: dict[str, Any] | None = None
-    try:
-        # Try to reconcile via daemon then fetch status snapshot
-        with contextlib.suppress(HubServiceError):
-            await _call_daemon_api_async(config, "POST", "/hub/reload")
-        snapshot = await _call_daemon_api_async(config, "GET", "/hub/status")
-    except HubServiceError as exc:
-        warnings.append(f"Hub manager unavailable: {exc}")
+
+    # Check if controller is available directly (unified daemon mode)
+    controller = getattr(raw_request.app.state, "hub_controller", None)
+    if controller is None:
+        controller = getattr(raw_request.app.state, "supervisor", None)
+
+    if controller is not None:
+        # Use controller directly in unified daemon mode
+        try:
+            # Ensure config is up to date
+            with contextlib.suppress(Exception):
+                await controller.reload_config()
+            snapshot = controller.get_status()
+        except Exception as exc:
+            warnings.append(f"Failed to get status from controller: {exc}")
+    else:
+        # Fall back to daemon API calls (legacy mode)
+        try:
+            # Try to reconcile via daemon then fetch status snapshot
+            with contextlib.suppress(HubServiceError):
+                await _call_daemon_api_async(config, "POST", "/hub/reload")
+            snapshot = await _call_daemon_api_async(config, "GET", "/hub/status")
+        except HubServiceError as exc:
+            warnings.append(f"Hub manager unavailable: {exc}")
 
     models, counts = _build_models_from_config(config, snapshot)
     response_timestamp = int(time.time())
@@ -659,7 +676,7 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
         if isinstance(timestamp_value, (int, float)):
             response_timestamp = int(timestamp_value)
 
-    controller_available = getattr(raw_request.app.state, "hub_controller", None) is not None
+    controller_available = controller is not None
 
     return HubStatusResponse(
         status="ok" if snapshot is not None else "degraded",
@@ -692,7 +709,15 @@ async def hub_status_page(raw_request: Request) -> HTMLResponse:
     HTTPException
         If the status page is disabled.
     """
-    config = getattr(raw_request.app.state, "server_config", None)
+    try:
+        config = _load_hub_config_from_request(raw_request)
+    except HubConfigError as e:
+        # If config can't be loaded, default to disabled
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail="Hub status page is disabled in configuration.",
+        ) from e
+
     enabled = bool(getattr(config, "enable_status_page", False))
     if not enabled:
         raise HTTPException(
@@ -746,9 +771,7 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
             "Hub configuration must be saved to disk before starting the manager."
         )
 
-    pid = start_hub_service_process(
-        str(config.source_path), host=config.host, port=config.daemon_port
-    )
+    pid = start_hub_service_process(str(config.source_path), host=config.host, port=config.port)
 
     # Wait for daemon to become available
     deadline = time.time() + 20.0
@@ -871,16 +894,29 @@ async def hub_service_reload(raw_request: Request) -> HubServiceActionResponse |
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
 
-    try:
-        # Ensure daemon responds to health check
-        await _call_daemon_api_async(config, "GET", "/health")
-    except HubServiceError:
-        return _manager_unavailable_response()
+    # Check if controller is available directly (unified daemon mode)
+    controller = getattr(raw_request.app.state, "hub_controller", None)
+    if controller is None:
+        controller = getattr(raw_request.app.state, "supervisor", None)
 
-    try:
-        diff = await _call_daemon_api_async(config, "POST", "/hub/reload") or {}
-    except HubServiceError as exc:
-        return _service_error_response("reload hub configuration", exc)
+    if controller is not None:
+        # Use controller directly in unified daemon mode
+        try:
+            diff = await controller.reload_config()
+        except Exception as exc:
+            return _service_error_response("reload hub configuration", HubServiceError(str(exc)))
+    else:
+        # Fall back to daemon API calls (legacy mode)
+        try:
+            # Ensure daemon responds to health check
+            await _call_daemon_api_async(config, "GET", "/health")
+        except HubServiceError:
+            return _manager_unavailable_response()
+
+        try:
+            diff = await _call_daemon_api_async(config, "POST", "/hub/reload") or {}
+        except HubServiceError as exc:
+            return _service_error_response("reload hub configuration", exc)
 
     return HubServiceActionResponse(
         status="ok",
@@ -1063,7 +1099,9 @@ async def hub_vram_unload(
 
 
 @hub_router.post("/hub/shutdown", response_model=HubServiceActionResponse)
-async def hub_shutdown(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
+async def hub_shutdown(
+    raw_request: Request, background_tasks: BackgroundTasks
+) -> HubServiceActionResponse | JSONResponse:
     """Request the hub daemon to shutdown all managed models and exit.
 
     This endpoint forwards the shutdown request to the running hub manager
@@ -1073,6 +1111,18 @@ async def hub_shutdown(raw_request: Request) -> HubServiceActionResponse | JSONR
         config = _load_hub_config_from_request(raw_request)
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
+
+    controller = getattr(raw_request.app.state, "hub_controller", None)
+    if controller is None:
+        controller = getattr(raw_request.app.state, "supervisor", None)
+    if controller is not None:
+        background_tasks.add_task(controller.shutdown_all)
+        return HubServiceActionResponse(
+            status="ok",
+            action="stop",
+            message="Shutdown requested",
+            details={},
+        )
 
     try:
         await _call_daemon_api_async(config, "POST", "/hub/shutdown")
@@ -1123,6 +1173,21 @@ async def _hub_model_service_action(
         config = _load_hub_config_from_request(raw_request)
     except HubConfigError as exc:
         return _hub_config_error_response(str(exc))
+
+    controller = getattr(raw_request.app.state, "hub_controller", None)
+    if controller is None:
+        controller = getattr(raw_request.app.state, "supervisor", None)
+    if controller is not None:
+        try:
+            if action == "start":
+                await controller.start_model(target)
+                message = f"Model '{target}' start requested"
+            else:
+                await controller.stop_model(target)
+                message = f"Model '{target}' stop requested"
+        except Exception as exc:
+            return _controller_error_response(exc)
+        return HubModelActionResponse(status="ok", action=action, model=target, message=message)
 
     try:
         await _call_daemon_api_async(config, "GET", "/health")

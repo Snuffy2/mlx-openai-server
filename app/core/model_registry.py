@@ -70,7 +70,7 @@ class ModelRegistry:
         """
         self._activity_notifier = notifier
 
-    async def register_model(
+    def register_model(
         self,
         model_id: str,
         handler: ManagerProtocol | None,
@@ -94,36 +94,35 @@ class ModelRegistry:
             Optional dictionary of additional metadata to merge.
         """
 
-        async with self._lock:
-            if model_id in self._handlers:
-                raise ValueError(f"Model '{model_id}' is already registered")
+        if model_id in self._handlers:
+            raise ValueError(f"Model '{model_id}' is already registered")
 
-            metadata = ModelMetadata(
-                id=model_id,
-                type=model_type,
-                context_length=context_length,
-                created_at=int(time.time()),
-            )
+        metadata = ModelMetadata(
+            id=model_id,
+            type=model_type,
+            context_length=context_length,
+            created_at=int(time.time()),
+        )
 
-            base_metadata: dict[str, Any] = {
-                "model_type": model_type,
-                "context_length": context_length,
-                "status": "initialized" if handler else "unloaded",
-            }
-            if metadata_extras:
-                base_metadata.update(metadata_extras)
+        base_metadata: dict[str, Any] = {
+            "model_type": model_type,
+            "context_length": context_length,
+            "status": "initialized" if handler else "unloaded",
+        }
+        if metadata_extras:
+            base_metadata.update(metadata_extras)
 
-            base_metadata.setdefault(
-                "vram_loaded", bool(handler and getattr(handler, "is_vram_loaded", lambda: False)())
-            )
-            base_metadata.setdefault("vram_last_load_ts", None)
-            base_metadata.setdefault("vram_last_unload_ts", None)
-            base_metadata.setdefault("vram_load_error", None)
-            base_metadata.setdefault("active_requests", 0)
+        base_metadata.setdefault(
+            "vram_loaded", bool(handler and getattr(handler, "is_vram_loaded", lambda: False)())
+        )
+        base_metadata.setdefault("vram_last_load_ts", None)
+        base_metadata.setdefault("vram_last_unload_ts", None)
+        base_metadata.setdefault("vram_load_error", None)
+        base_metadata.setdefault("active_requests", 0)
 
-            self._handlers[model_id] = handler
-            self._metadata[model_id] = metadata
-            self._extra[model_id] = base_metadata
+        self._handlers[model_id] = handler
+        self._metadata[model_id] = metadata
+        self._extra[model_id] = base_metadata
 
     async def update_model_state(
         self,

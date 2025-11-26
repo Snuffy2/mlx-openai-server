@@ -14,7 +14,7 @@ def test_registry_tracks_handlers_and_metadata() -> None:
 
 async def _exercise_registry() -> None:
     registry = ModelRegistry()
-    await registry.register_model(
+    registry.register_model(
         model_id="foo",
         handler=None,
         model_type="lm",
@@ -87,7 +87,7 @@ def test_get_or_attach_manager_concurrency() -> None:
 
     async def _test() -> None:
         registry = ModelRegistry()
-        await registry.register_model(model_id="concur", handler=None, model_type="lm")
+        registry.register_model(model_id="concur", handler=None, model_type="lm")
 
         loader_called = 0
 
@@ -125,7 +125,7 @@ def test_get_or_attach_manager_concurrent() -> None:
     async def _test() -> None:
         registry = ModelRegistry()
         model_id = "concurrent-model"
-        await registry.register_model(model_id, handler=None, model_type="lm")
+        registry.register_model(model_id, handler=None, model_type="lm")
 
         loader_call_count = 0
 
@@ -156,7 +156,7 @@ def test_request_vram_load_unload_idempotent_concurrent() -> None:
     async def _test() -> None:
         registry = ModelRegistry()
         model_id = "vram-model"
-        await registry.register_model(model_id, handler=None, model_type="lm")
+        registry.register_model(model_id, handler=None, model_type="lm")
 
         # Attach a DummyManager directly via update_model_state (simulate an attached manager)
         manager = DummyManager()
@@ -194,7 +194,7 @@ def test_handler_session_updates_active_requests_and_notifies() -> None:
     async def _test() -> None:
         registry = ModelRegistry()
         model_id = "session-model"
-        await registry.register_model(model_id, handler=None, model_type="lm")
+        registry.register_model(model_id, handler=None, model_type="lm")
 
         manager = DummyManager()
         await registry.update_model_state(model_id, handler=manager)
@@ -225,7 +225,7 @@ def test_request_vram_idempotency() -> None:
     async def _test() -> None:
         registry = ModelRegistry()
         manager = DummyManager()
-        await registry.register_model(model_id="idm", handler=manager, model_type="lm")
+        registry.register_model(model_id="idm", handler=manager, model_type="lm")
 
         # First load
         await registry.request_vram_load("idm")
@@ -258,7 +258,7 @@ def test_handler_session_counts_and_ensure() -> None:
     async def _test() -> None:
         registry = ModelRegistry()
         manager = DummyManager()
-        await registry.register_model(model_id="sess", handler=manager, model_type="lm")
+        registry.register_model(model_id="sess", handler=manager, model_type="lm")
 
         # Before any sessions
         status0 = registry.get_vram_status("sess")

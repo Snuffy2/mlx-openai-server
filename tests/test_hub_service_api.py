@@ -82,6 +82,9 @@ class _StubController:
     def __init__(self) -> None:
         self.loaded: list[str] = []
         self.unloaded: list[str] = []
+        self.started: list[str] = []
+        self.stopped: list[str] = []
+        self.reload_count = 0
 
     async def load_model(self, name: str) -> None:
         self.loaded.append(name)
@@ -92,6 +95,52 @@ class _StubController:
         self.unloaded.append(name)
         if name == "missing":
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="not loaded")
+
+    async def start_model(self, name: str) -> None:
+        self.started.append(name)
+        if name == "saturated":
+            raise HTTPException(status_code=HTTPStatus.TOO_MANY_REQUESTS, detail="group full")
+
+    async def stop_model(self, name: str) -> None:
+        self.stopped.append(name)
+
+    async def reload_config(self) -> dict[str, Any]:
+        self.reload_count += 1
+        return {"started": [], "stopped": ["old_model"], "unchanged": ["alpha", "beta"]}
+
+    def get_status(self) -> dict[str, Any]:
+        """Return a mock status snapshot."""
+        return {
+            "timestamp": 1234567890.0,
+            "models": [
+                {
+                    "name": "alpha",
+                    "state": "running",
+                    "pid": 12345,
+                    "port": 8124,
+                    "started_at": 1234567800.0,
+                    "exit_code": None,
+                    "memory_loaded": True,
+                    "group": None,
+                    "is_default": True,
+                    "model_path": "test/path",
+                    "auto_unload_minutes": 120,
+                },
+                {
+                    "name": "beta",
+                    "state": "stopped",
+                    "pid": None,
+                    "port": 8125,
+                    "started_at": None,
+                    "exit_code": None,
+                    "memory_loaded": False,
+                    "group": None,
+                    "is_default": False,
+                    "model_path": "test/path2",
+                    "auto_unload_minutes": None,
+                },
+            ],
+        }
 
 
 @pytest.fixture
@@ -202,7 +251,7 @@ def test_hub_status_uses_service_snapshot(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Hub status endpoint should prefer hub service snapshots when available."""
-    client, state, _controller = hub_service_app
+    client, state, controller = hub_service_app
     state.available = True
 
     response = client.get("/hub/status")
@@ -212,49 +261,49 @@ def test_hub_status_uses_service_snapshot(
     assert payload["counts"] == {"registered": 2, "started": 1, "loaded": 1}
     assert payload["models"][0]["metadata"]["default"] is True
     assert payload["models"][0]["metadata"]["status"] == "running"
-    assert state.reload_calls == 1
+    assert controller.reload_count == 1
 
 
 def test_hub_status_degrades_when_service_unavailable(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
-    """Hub status should downgrade to 'degraded' when the service is offline."""
+    """Hub status should be ok when controller is available, even if service is offline."""
     client, state, _controller = hub_service_app
     state.available = False
 
     response = client.get("/hub/status")
     assert response.status_code == HTTPStatus.OK
     payload = response.json()
-    assert payload["status"] == "degraded"
+    assert payload["status"] == "ok"
     assert payload["counts"]["registered"] == 2
 
 
 def test_hub_model_start_calls_service_client(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
-    """Model start endpoint should call HubServiceClient.start_model after reload."""
-    client, state, _controller = hub_service_app
+    """Model start endpoint should call controller.start_model."""
+    client, state, controller = hub_service_app
     state.available = True
 
     response = client.post("/hub/models/alpha/start", json={})
 
     assert response.status_code == HTTPStatus.OK
-    assert state.start_calls == ["alpha"]
-    assert state.reload_calls == 1
+    assert controller.started == ["alpha"]
+    assert state.reload_calls == 0
 
 
 def test_hub_model_start_surfaces_capacity_errors(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
-    """Capacity errors from HubServiceClient should translate to HTTP 429 responses."""
-    client, state, _controller = hub_service_app
+    """Capacity errors from controller should translate to HTTP 429 responses."""
+    client, state, controller = hub_service_app
     state.available = True
 
     response = client.post("/hub/models/saturated/start", json={})
 
     assert response.status_code == HTTPStatus.TOO_MANY_REQUESTS
     body = response.json()
-    assert body["error"]["message"].startswith("Failed to start")
+    assert body["error"]["message"] == "429: group full"
 
 
 def test_hub_service_start_spawns_process_when_missing(
@@ -325,17 +374,20 @@ def test_hub_service_reload_endpoint_returns_diff(
 ) -> None:
     """/hub/service/reload should surface the diff returned by the service."""
 
-    client, state, _controller = hub_service_app
+    client, state, controller = hub_service_app
     state.available = True
-    state.reload_result = {"started": ["alpha"], "stopped": ["beta"], "unchanged": []}
 
     response = client.post("/hub/service/reload")
 
     assert response.status_code == HTTPStatus.OK
     body = response.json()
     assert body["action"] == "reload"
-    assert body["details"] == state.reload_result
-    assert state.reload_calls == 1
+    assert body["details"] == {
+        "started": [],
+        "stopped": ["old_model"],
+        "unchanged": ["alpha", "beta"],
+    }
+    assert controller.reload_count == 1
 
 
 def test_hub_load_model_invokes_controller(

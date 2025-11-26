@@ -52,7 +52,7 @@ def test_central_controller_unloads_idle_model() -> None:
         mgr = FakeManager()
 
         # Register model with metadata that indicates immediate auto-unload
-        await registry.register_model(
+        registry.register_model(
             model_id="m1",
             handler=mgr,
             model_type="lm",
@@ -82,7 +82,7 @@ def test_activity_resets_idle_timer() -> None:
         registry = ModelRegistry()
         mgr = FakeManager()
 
-        await registry.register_model(
+        registry.register_model(
             model_id="m2",
             handler=mgr,
             model_type="lm",
@@ -122,7 +122,7 @@ def test_unload_failure_triggers_backoff() -> None:
         registry = ModelRegistry()
         mgr = FailManager()
 
-        await registry.register_model(
+        registry.register_model(
             model_id="m3",
             handler=mgr,
             model_type="lm",

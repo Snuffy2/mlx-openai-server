@@ -13,7 +13,6 @@ import datetime
 import json
 import os
 from pathlib import Path
-import socket
 import subprocess
 import sys
 import time
@@ -143,11 +142,11 @@ def _controller_base_url(config: MLXHubConfig) -> str:
     runtime = _read_hub_runtime_state(config)
     if runtime:
         host = runtime.get("host") or (config.host or DEFAULT_BIND_HOST)
-        port = runtime.get("daemon_port") or config.daemon_port
+        port = config.port
         return f"http://{host}:{port}"
 
     host = config.host or DEFAULT_BIND_HOST
-    port = config.daemon_port
+    port = config.port
     return f"http://{host}:{port}"
 
 
@@ -162,7 +161,7 @@ def _runtime_state_path(config: MLXHubConfig) -> Path:
     return log_dir / "hub_runtime.json"
 
 
-def _write_hub_runtime_state(config: MLXHubConfig, pid: int, daemon_port: int) -> None:
+def _write_hub_runtime_state(config: MLXHubConfig, pid: int) -> None:
     """Persist transient runtime info so other CLI commands can find the running daemon.
 
     The file is intentionally lightweight and not used for durable configuration.
@@ -172,7 +171,6 @@ def _write_hub_runtime_state(config: MLXHubConfig, pid: int, daemon_port: int) -
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "pid": int(pid),
-            "daemon_port": int(daemon_port),
             "host": config.host or "127.0.0.1",
             "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
         }
@@ -190,7 +188,6 @@ def _read_hub_runtime_state(config: MLXHubConfig) -> dict[str, object] | None:
             return None
         data = json.loads(path.read_text())
         pid = int(data.get("pid"))
-        port = int(data.get("daemon_port"))
         host = data.get("host") or "127.0.0.1"
     except Exception:
         return None
@@ -207,14 +204,7 @@ def _read_hub_runtime_state(config: MLXHubConfig) -> dict[str, object] | None:
     if not pid_alive:
         return None
 
-    # Quick port check on localhost
-    try:
-        with socket.create_connection((host, port), timeout=0.2):
-            pass
-    except Exception:
-        return None
-
-    return {"pid": pid, "daemon_port": port, "host": host}
+    return {"pid": pid, "host": host}
 
 
 def _call_daemon_api(
@@ -980,7 +970,7 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 
         click.echo("Starting hub manager...")
         host_val = config.host or DEFAULT_BIND_HOST
-        port_val = str(config.daemon_port)
+        port_val = str(config.port)
 
         # Set environment variable for daemon to use the same config
         env = os.environ.copy()
@@ -1030,7 +1020,7 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
             ) from None
         # Persist runtime state for other CLI invocations to find this daemon
         try:
-            _write_hub_runtime_state(config, proc.pid, int(port_val))
+            _write_hub_runtime_state(config, proc.pid)
         except Exception:
             # Best-effort; do not fail start if writing runtime state fails
             logger.debug("Failed to write hub runtime state after start")
@@ -1074,9 +1064,7 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     click.echo(f"Status page enabled: {'yes' if config.enable_status_page else 'no'}")
     if config.enable_status_page:
         host_display = "localhost" if config.host == "0.0.0.0" else config.host
-        click.echo(
-            f"Browse to http://{host_display}:{config.daemon_port}/hub for the status dashboard"
-        )
+        click.echo(f"Browse to http://{host_display}:{config.port}/hub for the status dashboard")
 
     snapshot = None
     try:

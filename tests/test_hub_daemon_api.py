@@ -68,11 +68,12 @@ models:
     app = create_app(str(cfg))
     stub = _StubSupervisor()
     app.state.supervisor = stub
+    app.state.hub_controller = stub
 
     client = TestClient(app)
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    assert r.json() == {"status": "ok", "model_id": None, "model_status": "controller"}
 
     r = client.get("/hub/status")
     assert r.status_code == 200
@@ -97,23 +98,24 @@ models:
     app = create_app(str(cfg))
     stub = _StubSupervisor()
     app.state.supervisor = stub
+    app.state.hub_controller = stub
 
     client = TestClient(app)
     r = client.post("/hub/models/alpha/start")
     assert r.status_code == 200
-    assert r.json()["status"] == "started"
+    assert r.json()["status"] == "ok"
 
     r = client.post("/hub/models/alpha/stop")
     assert r.status_code == 200
-    assert r.json()["status"] == "stopped"
+    assert r.json()["status"] == "ok"
 
     r = client.post("/hub/models/alpha/load")
     assert r.status_code == 200
-    assert r.json()["status"] == "memory_loaded"
+    assert r.json()["status"] == "ok"
 
     r = client.post("/hub/models/alpha/unload")
     assert r.status_code == 200
-    assert r.json()["status"] == "memory_unloaded"
+    assert r.json()["status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -133,13 +135,19 @@ models:
     app = create_app(str(cfg))
     stub = _StubSupervisor()
     app.state.supervisor = stub
+    app.state.hub_controller = stub
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         r = await client.post("/hub/shutdown")
         assert r.status_code == 200
-        assert r.json() == {"status": "shutdown_scheduled"}
+        assert r.json() == {
+            "status": "ok",
+            "action": "stop",
+            "message": "Shutdown requested",
+            "details": {},
+        }
 
         # background tasks run after response; give the loop a moment
         await asyncio.sleep(0.1)
