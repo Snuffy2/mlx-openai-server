@@ -530,7 +530,7 @@ class MLXVLMHandler:
             model_params.pop("stream", None)
 
             # Call the model
-            response = self.model(
+            response, _ = self.model(
                 messages=messages,
                 stream=stream,
                 **model_params,
@@ -544,7 +544,8 @@ class MLXVLMHandler:
             gc.collect()
             raise
         else:
-            return response
+            prompt_tokens = self._count_message_tokens(messages, **model_params)
+            return response, prompt_tokens
 
     async def get_queue_stats(self) -> dict[str, Any]:
         """

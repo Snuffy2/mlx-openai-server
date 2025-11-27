@@ -95,28 +95,7 @@ def test_health_reports_ok_when_controller_present() -> None:
 
 def test_hub_status_reports_degraded_when_config_unavailable(tmp_path: Path) -> None:
     """Hub status should report degraded state when hub config cannot be loaded."""
-    registry_payload = [
-        {
-            "id": "alpha",
-            "object": "model",
-            "created": 111,
-            "owned_by": "local",
-            "metadata": {"status": "initialized"},
-        },
-        {
-            "id": "beta",
-            "object": "model",
-            "created": 222,
-            "owned_by": "local",
-            "metadata": {"status": "unloaded"},
-        },
-    ]
-
-    class _Registry:
-        def list_models(self) -> list[dict[str, object]]:
-            return registry_payload
-
-    state = _build_state(handler_manager=None, handler=None, registry=_Registry())
+    state = _build_state(handler_manager=None, handler=None, registry=None)
     state.hub_config_path = tmp_path / "does-not-exist-hub.yaml"
     request = SimpleNamespace(app=SimpleNamespace(state=state))
 

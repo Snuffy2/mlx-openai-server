@@ -45,36 +45,11 @@ def create_app_with_config(config_path: str) -> FastAPI:
 
 @dataclass
 class ModelRecord:
-    """Runtime record for a supervised model.
-
-    Attributes
-    ----------
-    name : str
-        Slug name of the model.
-    config : Any
-        The model configuration object (from `MLXHubConfig`).
-    manager : LazyHandlerManager | None
-        The handler manager for the model.
-    memory_loaded : bool
-        Whether the model's runtime/memory is currently loaded.
-    auto_unload_minutes : int | None
-        Optional idle minutes after which memory should be auto-unloaded.
-    group : str | None
-        Group slug for capacity accounting.
-    is_default : bool
-        Whether this model is marked as a default auto-start.
-    model_path : str | None
-        Configured model path.
-    started_at : float | None
-        Timestamp when the model was started.
-    exit_code : int | None
-        Exit code if the model stopped (None if running).
-    """
+    """Record of a model's runtime state."""
 
     name: str
     config: Any
     manager: Any | None = None  # LazyHandlerManager
-    memory_loaded: bool = False
     auto_unload_minutes: int | None = None
     group: str | None = None
     is_default: bool = False
@@ -131,8 +106,11 @@ class HubSupervisor:
                 raise HTTPException(status_code=404, detail="model not found")
             record = self._models[name]
 
-            if record.manager and record.memory_loaded:
+            if record.manager and record.manager.is_vram_loaded():
                 return {"status": "already_loaded", "name": name}
+
+            # Store the original registered model identifier before potentially overwriting
+            original_model_path = record.model_path
 
             if not record.manager:
                 # Create the manager
@@ -155,13 +133,20 @@ class HubSupervisor:
                     or getattr(record.config, "model_name", None),
                 )
                 record.manager = LazyHandlerManager(cfg)
-                record.model_path = cfg.model_path
+                # Only overwrite record.model_path if cfg.model_path is truthy and matches the registered id
+                if cfg.model_path and cfg.model_path == original_model_path:
+                    record.model_path = cfg.model_path
 
             await record.manager.ensure_loaded("start")
-            record.memory_loaded = True
             if self.registry:
-                assert record.model_path is not None
-                await self.registry.update_model_state(record.model_path, handler=record.manager)
+                # Use the guaranteed registered model_id (original_model_path) for update_model_state
+                model_id_for_registry = (
+                    original_model_path if original_model_path else record.model_path
+                )
+                assert model_id_for_registry is not None
+                await self.registry.update_model_state(
+                    model_id_for_registry, handler=record.manager
+                )
             logger.info(f"Loaded model {name}")
             return {"status": "loaded", "name": name}
 

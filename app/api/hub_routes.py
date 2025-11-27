@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from http import HTTPStatus
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -91,7 +92,11 @@ def start_hub_service_process(
         str(port_val),
     ]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Set environment variable for the hub daemon to use the specified config
+    env = os.environ.copy()
+    env["MLX_HUB_CONFIG_PATH"] = config_path
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
     # Start background threads to log subprocess output
     def _log_output(stream: IO[bytes], level: str, prefix: str) -> None:
@@ -617,13 +622,7 @@ def get_running_hub_models(raw_request: Request) -> set[str] | None:
         name = entry.get("name")
         state = str(entry.get("state") or "").lower()
         if isinstance(name, str) and state == "running":
-            # Find the model_path for this name
-            for model in getattr(config, "models", []):
-                if getattr(model, "name", None) == name:
-                    model_path = getattr(model, "model_path", None)
-                    if model_path:
-                        running.add(model_path)
-                    break
+            running.add(name)
 
     return running
 

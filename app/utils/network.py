@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+import ipaddress
 import socket
 
 from ..const import DEFAULT_BIND_HOST
@@ -14,7 +15,7 @@ def is_port_available(host: str | None = None, port: int | None = None) -> bool:
     Parameters
     ----------
     host : str, optional
-        The host to check. If None, defaults to "0.0.0.0".
+        The host to check. If None, defaults to DEFAULT_BIND_HOST.
     port : int
         The port to check.
 
@@ -56,7 +57,11 @@ def _is_ipv6_host(host: str) -> bool:
     value = host.strip()
     if value.startswith("[") and value.endswith("]"):
         value = value[1:-1]
-    return ":" in value and not value.count(".")
+    try:
+        addr = ipaddress.ip_address(value)
+        return isinstance(addr, ipaddress.IPv6Address)
+    except ValueError:
+        return False
 
 
 def _normalize_host_for_binding(host: str, family: int) -> str:

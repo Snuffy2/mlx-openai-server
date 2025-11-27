@@ -8,6 +8,7 @@ responses. They were merged to keep controller behavior tests in one place.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import time
 
 import pytest
@@ -17,7 +18,7 @@ from app.server import CentralIdleAutoUnloadController
 
 
 async def _wait_for_condition(
-    condition_func: callable[[], bool],
+    condition_func: Callable[[], bool],
     timeout: float = 1.0,
     poll_interval: float = 0.01,
 ) -> bool:
@@ -30,7 +31,7 @@ async def _wait_for_condition(
     return False
 
 
-class FakeManager:
+class FakeManager:  # type: ignore[override]
     """Simple fake manager that tracks unload calls and VRAM state."""
 
     def __init__(self) -> None:
@@ -46,14 +47,14 @@ class FakeManager:
         self,
         *,
         force: bool = False,
-        timeout: float | None = None,
+        _timeout: float | None = None,
     ) -> None:
         """Simulate ensuring VRAM is loaded (idempotent)."""
         await asyncio.sleep(0)
         if not self._loaded or force:
             self._loaded = True
 
-    async def release_vram(self, *, timeout: float | None = None) -> None:
+    async def release_vram(self, *, _timeout: float | None = None) -> None:
         """Simulate releasing VRAM with a tiny sleep and record the call."""
         await asyncio.sleep(0)
         if self._loaded:
@@ -69,7 +70,7 @@ def test_central_controller_unloads_idle_model() -> None:
         mgr = FakeManager()
 
         # Register model with metadata that indicates immediate auto-unload
-        registry.register_model(
+        registry.register_model(  # type: ignore[arg-type]
             model_id="m1",
             handler=mgr,
             model_type="lm",
@@ -102,7 +103,7 @@ def test_activity_resets_idle_timer() -> None:
         registry = ModelRegistry()
         mgr = FakeManager()
 
-        registry.register_model(
+        registry.register_model(  # type: ignore[arg-type]
             model_id="m2",
             handler=mgr,
             model_type="lm",
@@ -147,7 +148,7 @@ def test_unload_failure_triggers_backoff() -> None:
         registry = ModelRegistry()
         mgr = FailManager()
 
-        registry.register_model(
+        registry.register_model(  # type: ignore[arg-type]
             model_id="m3",
             handler=mgr,
             model_type="lm",

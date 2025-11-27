@@ -81,14 +81,14 @@ def test_lifespan_with_fake_handler_ensure_vram_and_cleanup(
         def __init__(self, cfg: MLXServerConfig) -> None:
             self.model_path = cfg.model_path
 
-        async def initialize(self, cfg: MLXServerConfig) -> None:  # pragma: no cover - trivial
+        async def initialize(self, _cfg: MLXServerConfig) -> None:  # pragma: no cover - trivial
             return None
 
         async def ensure_vram_loaded(
             self,
             *,
-            force: bool = False,
-            timeout: float | None = None,
+            _force: bool = False,
+            _timeout: float | None = None,
         ) -> None:
             await asyncio.sleep(0)
             calls["ensure"] += 1

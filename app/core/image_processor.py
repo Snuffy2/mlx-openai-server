@@ -116,13 +116,14 @@ class ImageProcessor(BaseProcessor):
                 with contextlib.suppress(Exception):
                     image.close()
 
-    async def process_image_url(self, image_url: str, resize: bool = True) -> str:
+    async def process_image_url(self, image_url: str, *, resize: bool = True) -> str:
         """Process a single image URL and return path to cached file."""
         return await self._process_single_media(image_url, resize=resize)
 
     async def process_image_urls(
         self,
         image_urls: list[str],
+        *,
         resize: bool = True,
     ) -> list[str | BaseException]:
         """Process multiple image URLs and return paths to cached files (exceptions may be BaseException)."""

@@ -64,7 +64,6 @@ class _TestHubSupervisor(HubSupervisor):
             record.model_path = getattr(model, "model_path", None)
             record.auto_unload_minutes = getattr(model, "auto_unload_minutes", None)
             record.manager = None
-            record.memory_loaded = False
             record.started_at = None
             record.exit_code = None
             self._models[name] = record
@@ -125,6 +124,7 @@ async def test_model_start_sets_manager_and_memory_loaded(
     with patch("app.hub.daemon.LazyHandlerManager") as mock_lhm:
         mock_manager = MagicMock()
         mock_manager.ensure_loaded = AsyncMock(return_value=MagicMock())
+        mock_manager.is_vram_loaded.return_value = True
         mock_lhm.return_value = mock_manager
 
         result = await supervisor.start_model("regular_model")
@@ -135,7 +135,7 @@ async def test_model_start_sets_manager_and_memory_loaded(
         # Check that the record was updated
         record = supervisor._models["regular_model"]
         assert record.manager is not None
-        assert record.memory_loaded is True
+        assert record.manager.is_vram_loaded() is True
 
         # Verify LazyHandlerManager was created with correct config
         mock_lhm.assert_called_once()
@@ -152,7 +152,6 @@ async def test_model_start_already_loaded_returns_early(
     record = supervisor._models["regular_model"]
     record.manager = MagicMock()
     record.manager.is_vram_loaded.return_value = True
-    record.memory_loaded = True
 
     result = await supervisor.start_model("regular_model")
 
@@ -168,7 +167,6 @@ async def test_model_stop_unloads_and_clears_state(hub_config_with_defaults: MLX
     mock_manager = MagicMock()
     mock_manager.unload = AsyncMock(return_value=True)
     record.manager = mock_manager
-    record.memory_loaded = True
 
     result = await supervisor.stop_model("regular_model")
 
@@ -221,7 +219,6 @@ async def test_get_status_returns_correct_state(hub_config_with_defaults: MLXHub
     mock_manager = MagicMock()
     mock_manager.is_vram_loaded.return_value = True
     record.manager = mock_manager
-    record.memory_loaded = True
 
     status = supervisor.get_status()
 
@@ -248,7 +245,6 @@ async def test_reload_config_preserves_loaded_models(
     mock_manager = MagicMock()
     mock_manager.is_vram_loaded.return_value = True
     record.manager = mock_manager
-    record.memory_loaded = True
     record.started_at = 12345
 
     # Mock load_hub_config to return the same config
@@ -266,7 +262,7 @@ async def test_reload_config_preserves_loaded_models(
         # Verify the loaded model was preserved
         record_after = supervisor._models["regular_model"]
         assert record_after.manager is mock_manager
-        assert record_after.memory_loaded is True
+        assert record_after.manager.is_vram_loaded() is True
         assert record_after.started_at == 12345
 
         mock_load.assert_called_once_with(hub_config_with_defaults.source_path)

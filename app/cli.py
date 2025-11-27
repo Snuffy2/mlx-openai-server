@@ -1182,6 +1182,9 @@ def hub_stop(ctx: click.Context) -> None:
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
     try:
         _call_daemon_api(config, "POST", "/hub/reload")
+    except click.ClickException as e:
+        raise click.ClickException(f"Config sync failed before shutdown: {e}") from e
+    try:
         _call_daemon_api(config, "POST", "/hub/shutdown")
     except click.ClickException as e:
         raise click.ClickException(f"Hub shutdown failed: {e}") from e

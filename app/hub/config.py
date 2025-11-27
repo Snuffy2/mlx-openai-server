@@ -368,7 +368,7 @@ def load_hub_config(
         model_starting_port=model_starting_port,
         log_level=str(data.get("log_level", DEFAULT_LOG_LEVEL)),
         log_path=Path(str(data.get("log_path", DEFAULT_HUB_LOG_PATH))),
-        enable_status_page=data.get("enable_status_page", True),
+        enable_status_page=data.get("enable_status_page", DEFAULT_ENABLE_STATUS_PAGE),
         source_path=path,
     )
 

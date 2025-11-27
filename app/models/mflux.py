@@ -130,7 +130,7 @@ class ModelConfiguration:
         )
 
     @classmethod
-    def kontext(cls, quantize: int = 8) -> ModelConfiguration:
+    def kontext(cls, quantize: int = DEFAULT_QUANTIZE) -> ModelConfiguration:
         """Create configuration for Flux Kontext model."""
         return cls(
             model_type="kontext",

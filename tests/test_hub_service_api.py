@@ -183,7 +183,7 @@ models:
             "state": "running",
             "pid": 111,
             "group": "default",
-            "log_path": "/tmp/alpha.log",
+            "log_path": str(tmp_path / "alpha.log"),
         },
     ]
 

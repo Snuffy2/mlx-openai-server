@@ -620,13 +620,13 @@ class CentralIdleAutoUnloadController:
                 # Iterate registered models and consider unloading
                 try:
                     models = [m["id"] for m in self.registry.list_models()]
+                    # Keep the list_models payload so we can read per-model metadata
+                    entries = self.registry.list_models()
                 except Exception:
                     await asyncio.sleep(self.WATCH_LOOP_MAX_WAIT_SECONDS)
                     continue
 
                 now = time.time()
-                # Keep the list_models payload so we can read per-model metadata
-                entries = self.registry.list_models()
                 for mid in models:
                     # Skip if backoff in effect
                     next_allowed = self._backoff.get(mid, 0)

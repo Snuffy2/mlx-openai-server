@@ -485,7 +485,7 @@ class ModelRegistry:
         """
         if model_id not in self._extra:
             raise KeyError(f"Model '{model_id}' not found in registry")
-        entry = self._extra.get(model_id, {})
+        entry = self._extra[model_id]
         return {
             "vram_loaded": bool(entry.get("vram_loaded", False)),
             "vram_last_load_ts": entry.get("vram_last_load_ts"),

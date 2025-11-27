@@ -297,3 +297,73 @@ def test_hub_unload_model_cli_surfaces_errors(
 
     assert result.exit_code != 0
     assert "boom: test" in result.output
+
+
+def test_hub_config_option_loads_specified_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--config` option should load the specified config file, not the default."""
+    # Create two different config files
+    config1 = tmp_path / "config1.yaml"
+    config1.write_text(
+        """
+models:
+  - name: model-from-config1
+    model_path: /path/from/config1
+    model_type: lm
+""".strip()
+    )
+
+    config2 = tmp_path / "config2.yaml"
+    config2.write_text(
+        """
+models:
+  - name: model-from-config2
+    model_path: /path/from/config2
+    model_type: lm
+""".strip()
+    )
+
+    # Mock _load_hub_config_or_fail to capture the path it was called with
+    loaded_paths: list[str] = []
+
+    def mock_load_config(config_path: str | None) -> MLXHubConfig:
+        loaded_paths.append(str(config_path) if config_path else "None")
+        # Return a minimal config for the test
+        return MLXHubConfig(
+            models=[],
+            host="127.0.0.1",
+            port=8000,
+            enable_status_page=False,
+            log_path=tmp_path / "logs",
+        )
+
+    monkeypatch.setattr("app.cli._load_hub_config_or_fail", mock_load_config)
+
+    runner = CliRunner()
+    # Test with config1
+    result = runner.invoke(cli, ["hub", "--config", str(config1), "status"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert len(loaded_paths) == 1
+    assert loaded_paths[0] == str(config1)
+
+    # Clear for next test
+    loaded_paths.clear()
+
+    # Test with config2
+    result = runner.invoke(cli, ["hub", "--config", str(config2), "status"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert len(loaded_paths) == 1
+    assert loaded_paths[0] == str(config2)
+
+    # Clear for next test
+    loaded_paths.clear()
+
+    # Test without --config option (should use None, which means default)
+    result = runner.invoke(cli, ["hub", "status"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert len(loaded_paths) == 1
+    assert loaded_paths[0] == "None"  # None is passed when no --config option
