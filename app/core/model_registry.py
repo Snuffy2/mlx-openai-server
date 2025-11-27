@@ -23,10 +23,23 @@ from .manager_protocol import ManagerProtocol
 _UNSET = object()
 
 
-class VramMetadata(TypedDict, total=False):
-    """TypedDict describing common keys stored in ``_extra`` per-model metadata.
+class VRAMStatus(TypedDict, total=False):
+    """Per-model VRAM status metadata returned by ``get_vram_status``.
 
-    Notes
+    Attributes
+    ----------
+    vram_loaded : bool
+        Whether the model is currently loaded in VRAM.
+    vram_last_load_ts : int or None
+        Unix timestamp when the model was last loaded into VRAM, or ``None``.
+    vram_last_unload_ts : int or None
+        Unix timestamp when the model was last unloaded from VRAM, or ``None``.
+    vram_last_request_ts : int or None
+        Unix timestamp when the model last served a request, or ``None``.
+    vram_load_error : str or None
+        Error message from the last failed VRAM load attempt, or ``None``.
+    active_requests : int
+        Number of currently active requests being served by this model.
     -----
     The registry stores other dynamic keys as needed (e.g. ``_loading_task``),
     so this TypedDict is intentionally non-total to document the common subset
@@ -36,6 +49,7 @@ class VramMetadata(TypedDict, total=False):
     vram_loaded: bool
     vram_last_load_ts: int | None
     vram_last_unload_ts: int | None
+    vram_last_request_ts: int | None
     vram_load_error: str | None
     active_requests: int
 
@@ -93,7 +107,6 @@ class ModelRegistry:
         metadata_extras
             Optional dictionary of additional metadata to merge.
         """
-
         if model_id in self._handlers:
             raise ValueError(f"Model '{model_id}' is already registered")
 
@@ -113,10 +126,12 @@ class ModelRegistry:
             base_metadata.update(metadata_extras)
 
         base_metadata.setdefault(
-            "vram_loaded", bool(handler and getattr(handler, "is_vram_loaded", lambda: False)())
+            "vram_loaded",
+            bool(handler and getattr(handler, "is_vram_loaded", lambda: False)()),
         )
         base_metadata.setdefault("vram_last_load_ts", None)
         base_metadata.setdefault("vram_last_unload_ts", None)
+        base_metadata.setdefault("vram_last_request_ts", None)
         base_metadata.setdefault("vram_load_error", None)
         base_metadata.setdefault("active_requests", 0)
 
@@ -146,7 +161,6 @@ class ModelRegistry:
         metadata_updates
             Optional dict of extra metadata to merge into ``_extra[model_id]``.
         """
-
         async with self._lock:
             if model_id not in self._metadata:
                 raise KeyError(f"Model '{model_id}' not found in registry")
@@ -183,7 +197,6 @@ class ModelRegistry:
 
     async def unregister_model(self, model_id: str) -> None:
         """Remove a model from the registry."""
-
         async with self._lock:
             if model_id not in self._handlers:
                 raise KeyError(f"Model '{model_id}' not found in registry")
@@ -195,14 +208,12 @@ class ModelRegistry:
 
     def get_handler(self, model_id: str) -> ManagerProtocol | None:
         """Return the handler bound to ``model_id`` (may be ``None``)."""
-
         if model_id not in self._handlers:
             raise KeyError(f"Model '{model_id}' not found in registry")
         return self._handlers[model_id]
 
     def list_models(self) -> list[dict[str, Any]]:
         """Return OpenAI-compatible metadata for registered models."""
-
         output: list[dict[str, Any]] = []
         for mid, metadata in self._metadata.items():
             entry: dict[str, Any] = {
@@ -219,7 +230,6 @@ class ModelRegistry:
 
     def get_metadata(self, model_id: str) -> ModelMetadata:
         """Return the stored metadata for ``model_id``."""
-
         if model_id not in self._metadata:
             raise KeyError(f"Model '{model_id}' not found in registry")
         return self._metadata[model_id]
@@ -254,7 +264,6 @@ class ModelRegistry:
         RuntimeError
             If the loader fails to produce a manager.
         """
-
         async with self._lock:
             if model_id not in self._handlers:
                 raise KeyError(f"Model '{model_id}' not found in registry")
@@ -299,7 +308,11 @@ class ModelRegistry:
         return manager
 
     async def request_vram_load(
-        self, model_id: str, *, force: bool = False, timeout: float | None = None
+        self,
+        model_id: str,
+        *,
+        force: bool = False,
+        timeout: float | None = None,
     ) -> None:
         """Request that the attached manager load model weights into VRAM.
 
@@ -319,7 +332,6 @@ class ModelRegistry:
         RuntimeError
             If the manager's load operation fails.
         """
-
         async with self._lock:
             if model_id not in self._handlers:
                 raise KeyError(f"Model '{model_id}' not found in registry")
@@ -329,7 +341,7 @@ class ModelRegistry:
         if manager is None:
             raise KeyError(f"No manager attached for model '{model_id}'")
 
-        coro = manager.ensure_vram_loaded(force=force, timeout=timeout)
+        coro = manager.ensure_vram_loaded(force=force)
         if timeout is not None:
             await asyncio.wait_for(coro, timeout=timeout)
         else:
@@ -358,7 +370,6 @@ class ModelRegistry:
         RuntimeError
             If the manager's unload operation fails.
         """
-
         async with self._lock:
             if model_id not in self._handlers:
                 raise KeyError(f"Model '{model_id}' not found in registry")
@@ -368,7 +379,7 @@ class ModelRegistry:
         if manager is None:
             raise KeyError(f"No manager attached for model '{model_id}'")
 
-        coro = manager.release_vram(timeout=timeout)
+        coro = manager.release_vram()
         if timeout is not None:
             await asyncio.wait_for(coro, timeout=timeout)
         else:
@@ -381,7 +392,11 @@ class ModelRegistry:
             entry.pop("vram_load_error", None)
 
     def handler_session(
-        self, model_id: str, *, ensure_vram: bool = True, ensure_timeout: float | None = None
+        self,
+        model_id: str,
+        *,
+        ensure_vram: bool = True,
+        ensure_timeout: float | None = None,
     ) -> AbstractAsyncContextManager[ManagerProtocol]:
         """Async context manager for a per-request handler session.
 
@@ -415,6 +430,7 @@ class ModelRegistry:
                 manager = self._handlers[model_id]
                 entry = self._extra.setdefault(model_id, {})
                 entry["active_requests"] = entry.get("active_requests", 0) + 1
+                entry["vram_last_request_ts"] = int(time.time())
 
             # Notify activity (reset idle timers) for this model.
             try:
@@ -430,7 +446,7 @@ class ModelRegistry:
                 raise KeyError(f"No manager attached for model '{model_id}'")
 
             if ensure_vram:
-                coro = manager.ensure_vram_loaded(timeout=ensure_timeout)
+                coro = manager.ensure_vram_loaded()
                 if ensure_timeout is not None:
                     await asyncio.wait_for(coro, timeout=ensure_timeout)
                 else:
@@ -465,9 +481,8 @@ class ModelRegistry:
         -------
         dict[str, Any]
             Dictionary containing the keys: ``vram_loaded``, ``vram_last_load_ts``,
-            ``vram_last_unload_ts``, ``vram_load_error``, and ``active_requests``.
+            ``vram_last_unload_ts``, ``vram_last_request_ts``, ``vram_load_error``, and ``active_requests``.
         """
-
         if model_id not in self._extra:
             raise KeyError(f"Model '{model_id}' not found in registry")
         entry = self._extra.get(model_id, {})
@@ -475,16 +490,15 @@ class ModelRegistry:
             "vram_loaded": bool(entry.get("vram_loaded", False)),
             "vram_last_load_ts": entry.get("vram_last_load_ts"),
             "vram_last_unload_ts": entry.get("vram_last_unload_ts"),
+            "vram_last_request_ts": entry.get("vram_last_request_ts"),
             "vram_load_error": entry.get("vram_load_error"),
             "active_requests": int(entry.get("active_requests", 0)),
         }
 
     def has_model(self, model_id: str) -> bool:
         """Return ``True`` when the model is registered."""
-
         return model_id in self._handlers
 
     def get_model_count(self) -> int:
         """Return how many models are registered."""
-
         return len(self._handlers)

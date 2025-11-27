@@ -48,7 +48,9 @@ class MLX_LM:
     ) -> None:
         try:
             self.model, self.tokenizer, *_ = load(
-                model_path, lazy=False, tokenizer_config={"trust_remote_code": trust_remote_code}
+                model_path,
+                lazy=False,
+                tokenizer_config={"trust_remote_code": trust_remote_code},
             )
             self.pad_token_id = self.tokenizer.pad_token_id
             self.bos_token = self.tokenizer.bos_token
@@ -76,7 +78,9 @@ class MLX_LM:
         return embeddings / (l2_norms + 1e-8)
 
     def _batch_process(
-        self, prompts: list[str], batch_size: int = DEFAULT_BATCH_SIZE
+        self,
+        prompts: list[str],
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> list[list[int]]:
         """Process prompts in batches with optimized tokenization."""
         all_tokenized = []
@@ -123,7 +127,11 @@ class MLX_LM:
         return str(self.model_type)
 
     def get_embeddings(
-        self, prompts: list[str], batch_size: int = DEFAULT_BATCH_SIZE, *, normalize: bool = True
+        self,
+        prompts: list[str],
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        *,
+        normalize: bool = True,
     ) -> list[list[float]]:
         """
         Get embeddings for a list of prompts efficiently.
@@ -176,7 +184,11 @@ class MLX_LM:
         return all_embeddings
 
     def __call__(
-        self, messages: list[dict[str, str]], *, stream: bool = False, **kwargs: Any
+        self,
+        messages: list[dict[str, str]],
+        *,
+        stream: bool = False,
+        **kwargs: Any,
     ) -> tuple[str | Generator[Any, None, None], int]:
         """
         Generate text response from the model.
@@ -205,14 +217,17 @@ class MLX_LM:
         repetition_penalty = kwargs.get("repetition_penalty", 1.0)
         repetition_context_size = kwargs.get("repetition_context_size", 20)
         logits_processors = make_logits_processors(
-            repetition_penalty=repetition_penalty, repetition_context_size=repetition_context_size
+            repetition_penalty=repetition_penalty,
+            repetition_context_size=repetition_context_size,
         )
         json_schema = kwargs.get("schema")
         if json_schema:
             logits_processors.append(
                 OutlinesLogitsProcessor(  # type: ignore[abstract,call-arg]
-                    schema=json_schema, tokenizer=self.outlines_tokenizer, tensor_library_name="mlx"
-                )
+                    schema=json_schema,
+                    tokenizer=self.outlines_tokenizer,
+                    tensor_library_name="mlx",
+                ),
             )
 
         mx.random.seed(seed)

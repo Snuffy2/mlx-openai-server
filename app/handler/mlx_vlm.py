@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, Generator
 import gc
 from http import HTTPStatus
 import time
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import Any, NoReturn
 import uuid
 
 from fastapi import HTTPException
@@ -38,9 +38,6 @@ from ..schemas.openai import (
 )
 from ..utils.errors import create_error_response
 from .parser import ParserFactory
-
-if TYPE_CHECKING:
-    from ..core.manager_protocol import ManagerProtocol  # noqa: F401
 
 
 class MLXVLMHandler:
@@ -79,7 +76,9 @@ class MLXVLMHandler:
         """
         self.model_path = model_path
         self.model = MLX_VLM(
-            model_path, context_length=context_length, trust_remote_code=trust_remote_code
+            model_path,
+            context_length=context_length,
+            trust_remote_code=trust_remote_code,
         )
         self.image_processor = ImageProcessor(max_workers)
         self.audio_processor = AudioProcessor(max_workers)
@@ -111,7 +110,7 @@ class MLXVLMHandler:
                     "object": "model",
                     "created": self.model_created,
                     "owned_by": "local",
-                }
+                },
             ]
         except Exception as e:
             logger.error(f"Error getting models. {type(e).__name__}: {e}")
@@ -208,7 +207,10 @@ class MLXVLMHandler:
             # We will try to get the text part at least.
 
             text = self.model.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True, **kwargs
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                **kwargs,
             )
 
             # Now encode the text
@@ -229,7 +231,8 @@ class MLXVLMHandler:
             return self._count_tokens(total_text)
 
     async def generate_multimodal_stream(
-        self, request: ChatCompletionRequest
+        self,
+        request: ChatCompletionRequest,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Generate a streaming response for multimodal chat completion requests.
@@ -256,7 +259,8 @@ class MLXVLMHandler:
 
             # Submit to the multimodal queue and get the generator
             response_generator, prompt_tokens = await self.request_queue.submit(
-                request_id, request_dict
+                request_id,
+                request_dict,
             )
 
             # Create appropriate parsers for this model type
@@ -287,7 +291,7 @@ class MLXVLMHandler:
                 completion_chunks.append(text)
                 if is_first_chunk:
                     if thinking_parser and ParserFactory.needs_redacted_reasoning_prefix(
-                        self.reasoning_parser
+                        self.reasoning_parser,
                     ):
                         text = thinking_parser.get_thinking_open() + text
                     is_first_chunk = False
@@ -324,7 +328,7 @@ class MLXVLMHandler:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     total_tokens=total_tokens,
-                )
+                ),
             }
 
         except asyncio.QueueFull:
@@ -340,7 +344,7 @@ class MLXVLMHandler:
             raise
         except Exception as e:
             logger.error(
-                f"Error in multimodal stream generation for request {request_id}. {type(e).__name__}: {e}"
+                f"Error in multimodal stream generation for request {request_id}. {type(e).__name__}: {e}",
             )
             content = create_error_response(
                 f"Failed to generate multimodal stream: {e}",
@@ -420,7 +424,7 @@ class MLXVLMHandler:
             response_text = response
 
             if thinking_parser and ParserFactory.needs_redacted_reasoning_prefix(
-                self.reasoning_parser
+                self.reasoning_parser,
             ):
                 response_text = thinking_parser.get_thinking_open() + response_text
 
@@ -498,7 +502,8 @@ class MLXVLMHandler:
         logger.info("MLXVLMHandler cleanup completed successfully")
 
     async def _process_request(
-        self, request_data: dict[str, Any]
+        self,
+        request_data: dict[str, Any],
     ) -> tuple[str | Generator[str, None, None], int]:
         """
         Process a multimodal request. This is the worker function for the request queue.
@@ -552,7 +557,8 @@ class MLXVLMHandler:
         return self.request_queue.get_queue_stats()
 
     async def _reformat_multimodal_content_part(
-        self, content_part: ChatCompletionContentPart
+        self,
+        content_part: ChatCompletionContentPart,
     ) -> dict[str, Any]:
         """Reformat a multimodal message content part into a dictionary."""
         if (
@@ -563,7 +569,8 @@ class MLXVLMHandler:
             # Validate base64 data URLs before processing
             self._validate_image_url(image_url)
             image_path = await self.image_processor.process_image_url(
-                image_url, resize=not self.disable_auto_resize
+                image_url,
+                resize=not self.disable_auto_resize,
             )
             return {"content_part": {"type": "image", "image": image_path}, "path": image_path}
 
@@ -648,7 +655,7 @@ class MLXVLMHandler:
 
                         for content_part in message.content:
                             formatted_content_part = await self._reformat_multimodal_content_part(
-                                content_part
+                                content_part,
                             )
                             if isinstance(content_part, ChatCompletionContentPartImage):
                                 images.append(formatted_content_part["path"])
@@ -701,7 +708,9 @@ class MLXVLMHandler:
         except Exception as e:
             logger.error(f"Failed to prepare multimodal request. {type(e).__name__}: {e}")
             content = create_error_response(
-                f"Failed to process request: {e}", "bad_request", HTTPStatus.BAD_REQUEST
+                f"Failed to process request: {e}",
+                "bad_request",
+                HTTPStatus.BAD_REQUEST,
             )
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=content) from e
         else:
@@ -720,7 +729,9 @@ class MLXVLMHandler:
         """
         if not url:
             content = create_error_response(
-                "Empty image URL provided", "invalid_request_error", HTTPStatus.BAD_REQUEST
+                "Empty image URL provided",
+                "invalid_request_error",
+                HTTPStatus.BAD_REQUEST,
             )
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=content)
 
@@ -733,7 +744,9 @@ class MLXVLMHandler:
                 base64.b64decode(encoded)
             except Exception as e:
                 content = create_error_response(
-                    f"Invalid base64 image: {e}", "invalid_request_error", HTTPStatus.BAD_REQUEST
+                    f"Invalid base64 image: {e}",
+                    "invalid_request_error",
+                    HTTPStatus.BAD_REQUEST,
                 )
                 raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=content) from e
 
@@ -750,7 +763,9 @@ class MLXVLMHandler:
         """
         if not url:
             content = create_error_response(
-                "Empty audio data provided", "invalid_request_error", HTTPStatus.BAD_REQUEST
+                "Empty audio data provided",
+                "invalid_request_error",
+                HTTPStatus.BAD_REQUEST,
             )
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=content)
 
@@ -763,6 +778,8 @@ class MLXVLMHandler:
                 base64.b64decode(encoded)
             except Exception as e:
                 content = create_error_response(
-                    f"Invalid base64 audio: {e}", "invalid_request_error", HTTPStatus.BAD_REQUEST
+                    f"Invalid base64 audio: {e}",
+                    "invalid_request_error",
+                    HTTPStatus.BAD_REQUEST,
                 )
                 raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=content) from e

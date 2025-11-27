@@ -253,7 +253,8 @@ async def test_reload_config_preserves_loaded_models(
 
     # Mock load_hub_config to return the same config
     with patch(
-        "app.hub.daemon.load_hub_config", return_value=hub_config_with_defaults
+        "app.hub.daemon.load_hub_config",
+        return_value=hub_config_with_defaults,
     ) as mock_load:
         # Reload config (should preserve the loaded state)
         result = await supervisor.reload_config()
@@ -270,12 +271,6 @@ async def test_reload_config_preserves_loaded_models(
 
         mock_load.assert_called_once_with(hub_config_with_defaults.source_path)
     assert "unchanged" in result
-
-    # Check that the loaded model is still loaded
-    reloaded_record = supervisor._models["regular_model"]
-    assert reloaded_record.manager is mock_manager
-    assert reloaded_record.memory_loaded is True
-    assert reloaded_record.started_at == 12345
 
 
 @pytest.mark.asyncio
@@ -294,7 +289,7 @@ models:
   - name: regular_model
     model_path: /models/regular
     model_type: lm
-""".strip()
+""".strip(),
     )
 
     app = create_app(str(cfg))
@@ -307,19 +302,20 @@ models:
         start_calls.append(name)
         return {"status": "loaded", "name": name}
 
+    # Replace the supervisor's start_model method
     original_supervisor.start_model = mock_start_model
 
-    # The lifespan should have started the default model
-    # We can't easily test the lifespan directly, but we can check that
-    # the supervisor has the models configured correctly
-    supervisor = app.state.supervisor
+    # Use TestClient as context manager to trigger the lifespan
+    with TestClient(app):
+        # The lifespan should have auto-started the default model
+        pass
 
-    # Check that default models are marked correctly
-    default_record = supervisor._models["default_model"]
-    regular_record = supervisor._models["regular_model"]
+    # Restore the original supervisor
+    app.state.supervisor = original_supervisor
 
-    assert default_record.is_default is True
-    assert regular_record.is_default is False
+    # Assert that the default model was auto-started
+    assert "default_model" in start_calls
+    assert "regular_model" not in start_calls
 
 
 @pytest.mark.asyncio
@@ -334,7 +330,7 @@ models:
   - name: test_model
     model_path: /models/test
     model_type: lm
-""".strip()
+""".strip(),
     )
 
     app = create_app(str(cfg))

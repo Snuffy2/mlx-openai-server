@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AbstractAsyncContextManager
+from types import TracebackType
+from typing import Any
 
 from app.core.model_registry import ModelRegistry
 
@@ -57,13 +60,17 @@ class DummyManager:
         self.load_calls = 0
         self.unload_calls = 0
         self.ensure_lock = asyncio.Lock()
+        self._active_requests = 0
 
     def is_vram_loaded(self) -> bool:
         """Return whether VRAM is currently loaded for this manager."""
         return self._loaded
 
     async def ensure_vram_loaded(
-        self, *, force: bool = False, timeout: float | None = None
+        self,
+        *,
+        force: bool = False,
+        timeout: float | None = None,
     ) -> None:
         """Ensure VRAM is loaded; simulate a delay for loading."""
         async with self.ensure_lock:
@@ -81,37 +88,44 @@ class DummyManager:
                 await asyncio.sleep(0.005)
                 self._loaded = False
 
+    def request_session(
+        self,
+        *,
+        ensure_vram: bool = True,
+        ensure_timeout: float | None = None,
+    ) -> AbstractAsyncContextManager[Any]:
+        """Return an async context manager for request sessions."""
+        return DummySession(self, ensure_vram, ensure_timeout)
 
-def test_get_or_attach_manager_concurrency() -> None:
-    """Concurrent callers should share a single loader invocation."""
 
-    async def _test() -> None:
-        registry = ModelRegistry()
-        registry.register_model(model_id="concur", handler=None, model_type="lm")
+class DummySession:
+    """Simple async context manager for DummyManager sessions."""
 
-        loader_called = 0
+    def __init__(
+        self,
+        manager: DummyManager,
+        ensure_vram: bool,
+        ensure_timeout: float | None,
+    ) -> None:
+        self.manager = manager
+        self.ensure_vram = ensure_vram
+        self.ensure_timeout = ensure_timeout
 
-        async def loader(mid: str) -> DummyManager:
-            nonlocal loader_called
-            loader_called += 1
-            # Delay to force concurrent callers to wait on the same task
-            await asyncio.sleep(0.02)
-            return DummyManager()
+    async def __aenter__(self) -> DummyManager:
+        """Enter the async context manager."""
+        self.manager._active_requests += 1
+        if self.ensure_vram:
+            await self.manager.ensure_vram_loaded(timeout=self.ensure_timeout)
+        return self.manager
 
-        # Launch many concurrent get_or_attach_manager calls
-        tasks = [
-            asyncio.create_task(registry.get_or_attach_manager("concur", loader)) for _ in range(8)
-        ]
-        managers = await asyncio.gather(*tasks)
-
-        # All returned objects should be the same instance
-        first = managers[0]
-        for m in managers[1:]:
-            assert m is first
-
-        assert loader_called == 1
-
-    asyncio.run(_test())
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        """Exit the async context manager."""
+        self.manager._active_requests -= 1
 
 
 def test_get_or_attach_manager_concurrent() -> None:

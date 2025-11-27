@@ -63,13 +63,13 @@ router = APIRouter()
 router.include_router(hub_router)
 
 __all__ = [
-    "router",
+    "hub_load_model",
+    "hub_start_model",
     "hub_status",
     "hub_status_page",
-    "hub_start_model",
     "hub_stop_model",
-    "hub_load_model",
     "hub_unload_model",
+    "router",
 ]
 
 
@@ -100,7 +100,6 @@ async def _get_handler_or_error(
     tuple[MLXHandlerType | None, JSONResponse | None]
         A handler/error tuple where exactly one entry is ``None``.
     """
-
     controller = getattr(raw_request.app.state, "hub_controller", None)
     if controller is not None and model_name is not None:
         target = model_name.strip()
@@ -118,20 +117,11 @@ async def _get_handler_or_error(
             )
         try:
             handler = await controller.acquire_handler(target, reason=reason)
-        except Exception as exc:
-            status = getattr(exc, "status_code", HTTPStatus.INTERNAL_SERVER_ERROR)
-            return (
-                None,
-                JSONResponse(
-                    content=create_error_response(str(exc), "service_unavailable", status),
-                    status_code=status,
-                ),
-            )
         except HTTPException:
             raise
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except Exception as e:  # pragma: no cover - defensive logging
             logger.exception(
-                f"Unable to load handler for model '{target}'. {type(exc).__name__}: {exc}"
+                f"Unable to load handler for model '{target}'. {type(e).__name__}: {e}",
             )
             return (
                 None,
@@ -155,7 +145,7 @@ async def _get_handler_or_error(
             raise
         except Exception as e:  # pragma: no cover - defensive logging
             logger.exception(
-                f"Unable to load handler via JIT for {reason}. {type(e).__name__}: {e}"
+                f"Unable to load handler via JIT for {reason}. {type(e).__name__}: {e}",
             )
             return (
                 None,
@@ -196,7 +186,6 @@ def _hub_model_required_error() -> JSONResponse:
     JSONResponse
         A JSON response with error details.
     """
-
     return JSONResponse(
         content=create_error_response(
             "Model selection is required when the server runs in hub mode. "
@@ -231,7 +220,6 @@ def _resolve_model_name(
     tuple[str or None, JSONResponse or None]
         A tuple of (resolved_model_name, error_response) where exactly one is None.
     """
-
     normalized = (model_name or "").strip() or None
     controller = getattr(raw_request.app.state, "hub_controller", None)
     if controller is None:
@@ -248,9 +236,9 @@ def _resolve_model_name(
                 content=create_error_response(
                     f"Model '{normalized}' is not started. Start the process before sending requests.",
                     "invalid_request_error",
-                    HTTPStatus.NOT_FOUND,
+                    HTTPStatus.BAD_REQUEST,
                 ),
-                status_code=HTTPStatus.NOT_FOUND,
+                status_code=HTTPStatus.BAD_REQUEST,
             ),
         )
     return normalized, None
@@ -269,7 +257,6 @@ def _model_field_was_provided(payload: Any) -> bool:
     bool
         True if the model field was explicitly set.
     """
-
     fields_set = getattr(payload, "model_fields_set", None)
     if fields_set is None:
         fields_set = getattr(payload, "__fields_set__", None)
@@ -306,7 +293,9 @@ async def health(raw_request: Request) -> HealthCheckResponse | JSONResponse:
         if handler is not None:
             model_id = getattr(handler, "model_path", configured_model_id or "unknown")
             return HealthCheckResponse(
-                status=HealthCheckStatus.OK, model_id=model_id, model_status="initialized"
+                status=HealthCheckStatus.OK,
+                model_id=model_id,
+                model_status="initialized",
             )
         return HealthCheckResponse(
             status=HealthCheckStatus.OK,
@@ -331,7 +320,9 @@ async def health(raw_request: Request) -> HealthCheckResponse | JSONResponse:
 
     model_id = getattr(handler, "model_path", configured_model_id or "unknown")
     return HealthCheckResponse(
-        status=HealthCheckStatus.OK, model_id=model_id, model_status="initialized"
+        status=HealthCheckStatus.OK,
+        model_id=model_id,
+        model_status="initialized",
     )
 
 
@@ -431,7 +422,8 @@ async def models(raw_request: Request) -> ModelsResponse | JSONResponse:
 
 @router.get("/v1/queue/stats", response_model=None)
 async def queue_stats(
-    raw_request: Request, model: str | None = Query(None, description="Optional model name")
+    raw_request: Request,
+    model: str | None = Query(None, description="Optional model name"),
 ) -> dict[str, Any] | JSONResponse:
     """Get queue statistics.
 
@@ -459,7 +451,9 @@ async def queue_stats(
         return validation_error
 
     handler, error = await _get_handler_or_error(
-        raw_request, "queue_stats", model_name=resolved_model
+        raw_request,
+        "queue_stats",
+        model_name=resolved_model,
     )
     if error is not None:
         return error
@@ -479,7 +473,9 @@ async def queue_stats(
         logger.error(f"Failed to get queue stats: {e}")
         return JSONResponse(
             content=create_error_response(
-                "Failed to get queue stats", "server_error", HTTPStatus.INTERNAL_SERVER_ERROR
+                "Failed to get queue stats",
+                "server_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
             ),
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
@@ -494,7 +490,8 @@ async def queue_stats(
 
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(
-    request: ChatCompletionRequest, raw_request: Request
+    request: ChatCompletionRequest,
+    raw_request: Request,
 ) -> ChatCompletionResponse | StreamingResponse | JSONResponse:
     """Handle chat completion requests.
 
@@ -522,7 +519,9 @@ async def chat_completions(
         request.model = selected_model
 
     handler, error = await _get_handler_or_error(
-        raw_request, "chat_completions", model_name=selected_model
+        raw_request,
+        "chat_completions",
+        model_name=selected_model,
     )
     if error is not None:
         return error
@@ -539,7 +538,9 @@ async def chat_completions(
     if not isinstance(handler, MLXVLMHandler) and not isinstance(handler, MLXLMHandler):
         return JSONResponse(
             content=create_error_response(
-                "Unsupported model type", "unsupported_request", HTTPStatus.BAD_REQUEST
+                "Unsupported model type",
+                "unsupported_request",
+                HTTPStatus.BAD_REQUEST,
             ),
             status_code=HTTPStatus.BAD_REQUEST,
         )
@@ -555,13 +556,15 @@ async def chat_completions(
     except Exception as e:  # pragma: no cover - defensive logging
         logger.exception(f"Error processing chat completion request: {type(e).__name__}: {e}")
         return JSONResponse(
-            content=create_error_response(str(e)), status_code=HTTPStatus.INTERNAL_SERVER_ERROR
+            content=create_error_response(str(e)),
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
 
 @router.post("/v1/embeddings", response_model=None)
 async def embeddings(
-    request: EmbeddingRequest, raw_request: Request
+    request: EmbeddingRequest,
+    raw_request: Request,
 ) -> EmbeddingResponse | JSONResponse:
     """Handle embedding requests.
 
@@ -589,7 +592,9 @@ async def embeddings(
         request.model = selected_model
 
     handler, error = await _get_handler_or_error(
-        raw_request, "embeddings", model_name=selected_model
+        raw_request,
+        "embeddings",
+        model_name=selected_model,
     )
     if error is not None:
         return error
@@ -616,20 +621,24 @@ async def embeddings(
     try:
         embeddings_response = await handler.generate_embeddings_response(request)
         return create_response_embeddings(
-            embeddings_response, request.model, request.encoding_format
+            embeddings_response,
+            request.model,
+            request.encoding_format,
         )
     except HTTPException:
         raise
     except Exception as e:  # pragma: no cover - defensive logging
         logger.exception(f"Error processing embedding request: {type(e).__name__}: {e}")
         return JSONResponse(
-            content=create_error_response(str(e)), status_code=HTTPStatus.INTERNAL_SERVER_ERROR
+            content=create_error_response(str(e)),
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
 
 @router.post("/v1/images/generations", response_model=None)
 async def image_generations(
-    request: ImageGenerationRequest, raw_request: Request
+    request: ImageGenerationRequest,
+    raw_request: Request,
 ) -> ImageGenerationResponse | JSONResponse:
     """Handle image generation requests.
 
@@ -657,7 +666,9 @@ async def image_generations(
         request.model = selected_model
 
     handler, error = await _get_handler_or_error(
-        raw_request, "image_generation", model_name=selected_model
+        raw_request,
+        "image_generation",
+        model_name=selected_model,
     )
     if error is not None:
         return error
@@ -689,7 +700,8 @@ async def image_generations(
     except Exception as e:
         logger.exception(f"Error processing image generation request: {type(e).__name__}: {e}")
         return JSONResponse(
-            content=create_error_response(str(e)), status_code=HTTPStatus.INTERNAL_SERVER_ERROR
+            content=create_error_response(str(e)),
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
     else:
         return image_response
@@ -697,7 +709,8 @@ async def image_generations(
 
 @router.post("/v1/images/edits", response_model=None)
 async def create_image_edit(
-    request: Annotated[ImageEditRequest, Form()], raw_request: Request
+    request: Annotated[ImageEditRequest, Form()],
+    raw_request: Request,
 ) -> ImageEditResponse | JSONResponse:
     """Handle image editing requests with dynamic provider routing.
 
@@ -725,7 +738,9 @@ async def create_image_edit(
         request.model = selected_model
 
     handler, error = await _get_handler_or_error(
-        raw_request, "image_edit", model_name=selected_model
+        raw_request,
+        "image_edit",
+        model_name=selected_model,
     )
     if error is not None:
         return error
@@ -756,7 +771,8 @@ async def create_image_edit(
     except Exception as e:
         logger.exception(f"Error processing image edit request: {type(e).__name__}: {e}")
         return JSONResponse(
-            content=create_error_response(str(e)), status_code=HTTPStatus.INTERNAL_SERVER_ERROR
+            content=create_error_response(str(e)),
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
     else:
         return image_response
@@ -764,7 +780,8 @@ async def create_image_edit(
 
 @router.post("/v1/audio/transcriptions", response_model=None)
 async def create_audio_transcriptions(
-    request: Annotated[TranscriptionRequest, Form()], raw_request: Request
+    request: Annotated[TranscriptionRequest, Form()],
+    raw_request: Request,
 ) -> StreamingResponse | TranscriptionResponse | JSONResponse | str:
     """Handle audio transcription requests.
 
@@ -792,7 +809,9 @@ async def create_audio_transcriptions(
         request.model = selected_model
 
     handler, error = await _get_handler_or_error(
-        raw_request, "audio_transcriptions", model_name=selected_model
+        raw_request,
+        "audio_transcriptions",
+        model_name=selected_model,
     )
     if error is not None:
         return error
@@ -837,14 +856,17 @@ async def create_audio_transcriptions(
     except Exception as e:
         logger.exception(f"Error processing transcription request: {type(e).__name__}: {e}")
         return JSONResponse(
-            content=create_error_response(str(e)), status_code=HTTPStatus.INTERNAL_SERVER_ERROR
+            content=create_error_response(str(e)),
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
     else:
         return transcription_response
 
 
 def create_response_embeddings(
-    embeddings: list[list[float]], model: str, encoding_format: Literal["float", "base64"] = "float"
+    embeddings: list[list[float]],
+    model: str,
+    encoding_format: Literal["float", "base64"] = "float",
 ) -> EmbeddingResponse:
     """Create embedding response data from embeddings list.
 
@@ -869,8 +891,9 @@ def create_response_embeddings(
             embedding_bytes = np.array(embedding, dtype=np.float32).tobytes()
             embeddings_response.append(
                 EmbeddingResponseData(
-                    embedding=base64.b64encode(embedding_bytes).decode("utf-8"), index=index
-                )
+                    embedding=base64.b64encode(embedding_bytes).decode("utf-8"),
+                    index=index,
+                ),
             )
         else:
             embeddings_response.append(EmbeddingResponseData(embedding=embedding, index=index))
@@ -929,7 +952,7 @@ def create_response_chunk(
                     index=0,
                     delta=Delta(content=chunk, role="assistant"),  # type: ignore[call-arg]
                     finish_reason=finish_reason if is_final else None,  # type: ignore[arg-type]
-                )
+                ),
             ],
             request_id=request_id,
         )
@@ -950,7 +973,7 @@ def create_response_chunk(
                         content=chunk.get("content", None),
                     ),  # type: ignore[call-arg]
                     finish_reason=finish_reason if is_final else None,  # type: ignore[arg-type]
-                )
+                ),
             ],
             request_id=request_id,
         )
@@ -967,7 +990,7 @@ def create_response_chunk(
                     index=0,
                     delta=Delta(content=chunk["content"], role="assistant"),  # type: ignore[call-arg]
                     finish_reason=finish_reason if is_final else None,  # type: ignore[arg-type]
-                )
+                ),
             ],
             request_id=request_id,
         )
@@ -1004,7 +1027,9 @@ def create_response_chunk(
         created=created_time,
         model=model,
         choices=[
-            StreamingChoice(index=0, delta=delta, finish_reason=finish_reason if is_final else None)  # type: ignore[arg-type]
+            StreamingChoice(
+                index=0, delta=delta, finish_reason=finish_reason if is_final else None
+            ),  # type: ignore[arg-type]
         ],
         request_id=request_id,
     )
@@ -1029,7 +1054,9 @@ def _yield_sse_chunk(data: dict[str, Any] | ChatCompletionChunk) -> str:
 
 
 async def handle_stream_response(
-    generator: AsyncGenerator[Any, None], model: str, request_id: str | None = None
+    generator: AsyncGenerator[Any, None],
+    model: str,
+    request_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Handle streaming response generation (OpenAI-compatible).
 
@@ -1150,7 +1177,9 @@ async def handle_stream_response(
     except Exception as e:
         logger.exception(f"Error in stream wrapper: {type(e).__name__}: {e}")
         error_response = create_error_response(
-            str(e), "server_error", HTTPStatus.INTERNAL_SERVER_ERROR
+            str(e),
+            "server_error",
+            HTTPStatus.INTERNAL_SERVER_ERROR,
         )
         yield _yield_sse_chunk(error_response)
     finally:
@@ -1169,7 +1198,9 @@ async def handle_stream_response(
 
 
 async def process_multimodal_request(
-    handler: MLXVLMHandler, request: ChatCompletionRequest, request_id: str | None = None
+    handler: MLXVLMHandler,
+    request: ChatCompletionRequest,
+    request_id: str | None = None,
 ) -> ChatCompletionResponse | StreamingResponse | JSONResponse:
     """Process multimodal-specific requests.
 
@@ -1193,7 +1224,9 @@ async def process_multimodal_request(
     if request.stream:
         return StreamingResponse(
             handle_stream_response(
-                handler.generate_multimodal_stream(request), request.model, request_id
+                handler.generate_multimodal_stream(request),
+                request.model,
+                request_id,
             ),
             media_type="text/event-stream",
             headers={
@@ -1327,7 +1360,7 @@ def format_final_response(
                         tool_call_id=None,
                     ),
                     finish_reason="stop",
-                )
+                ),
             ],
             usage=usage,
             request_id=request_id,
@@ -1355,7 +1388,7 @@ def format_final_response(
                         tool_call_id=None,
                     ),
                     finish_reason="stop",
-                )
+                ),
             ],
             usage=usage,
             request_id=request_id,
@@ -1369,7 +1402,10 @@ def format_final_response(
             arguments_str = json.dumps(arguments)
         function_call = FunctionCall(name=tool_call.get("name"), arguments=arguments_str)
         tool_call_response = ChatCompletionMessageToolCall(
-            id=get_tool_call_id(), type="function", function=function_call, index=idx
+            id=get_tool_call_id(),
+            type="function",
+            function=function_call,
+            index=idx,
         )
         tool_call_responses.append(tool_call_response)
 

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-import socket
 from typing import Any
 
 from loguru import logger
@@ -22,6 +20,7 @@ from ..const import (
     DEFAULT_MODEL_STARTING_PORT,
     DEFAULT_PORT,
 )
+from ..utils.network import is_port_available
 
 PORT_MIN = 1024
 PORT_MAX = 65535
@@ -36,13 +35,12 @@ _slug_pattern = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$", re.IGNORECASE)
 
 def _ensure_slug(value: str, *, field_name: str) -> str:
     """Validate that ``value`` is already a compliant slug without altering it."""
-
     candidate = value.strip()
     if not candidate:
         raise HubConfigError(f"{field_name} cannot be empty")
     if not _slug_pattern.fullmatch(candidate):
         raise HubConfigError(
-            f"{field_name} must be alphanumeric with optional hyphen/underscore separators"
+            f"{field_name} must be alphanumeric with optional hyphen/underscore separators",
         )
     return candidate
 
@@ -76,10 +74,9 @@ class MLXHubConfig:
     source_path: Path | None = None
 
     def __post_init__(self) -> None:
-        """Normalize hub defaults and ensure log directories exist."""
+        """Normalize hub defaults."""
         self.log_level = self.log_level.upper()
         self.log_path = self.log_path.expanduser()
-        self.log_path.mkdir(parents=True, exist_ok=True)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -100,14 +97,13 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     HubConfigError
         If the file is not found or parsing fails.
     """
-
     try:
         with path.open("r", encoding="utf-8") as fh:
             loaded = yaml.safe_load(fh) or {}
-    except FileNotFoundError as exc:
-        raise HubConfigError(f"Hub config file not found: {path}") from exc
-    except yaml.YAMLError as exc:
-        raise HubConfigError(f"Failed to parse hub config '{path}': {exc}") from exc
+    except FileNotFoundError as e:
+        raise HubConfigError(f"Hub config file not found: {path}") from e
+    except yaml.YAMLError as e:
+        raise HubConfigError(f"Failed to parse hub config '{path}': {e}") from e
 
     if not isinstance(loaded, dict):
         raise HubConfigError("Hub config root must be a mapping")
@@ -132,7 +128,6 @@ def _build_groups(raw_groups: list[dict[str, Any]] | None) -> list[MLXHubGroupCo
     HubConfigError
         If group data is invalid.
     """
-
     groups: list[MLXHubGroupConfig] = []
     if not raw_groups:
         return groups
@@ -182,7 +177,6 @@ def _resolve_model_log_file(server_config: MLXServerConfig, hub_log_path: Path) 
     HubConfigError
         If the model name is missing.
     """
-
     if server_config.no_log_file:
         return server_config
 
@@ -239,7 +233,6 @@ def _build_models(
     HubConfigError
         If model data is invalid.
     """
-
     if not raw_models:
         raise HubConfigError("Hub config must include at least one model entry")
 
@@ -266,7 +259,7 @@ def _build_models(
         group_slug = _ensure_slug(str(group_value), field_name="group") if group_value else None
         if group_slug and group_lookup and group_slug not in group_lookup:
             raise HubConfigError(
-                f"Model '{name}' references group '{group_slug}' which is not defined in hub config"
+                f"Model '{name}' references group '{group_slug}' which is not defined in hub config",
             )
 
         model_payload = dict(raw_model)
@@ -302,7 +295,11 @@ def _build_models(
                 raise HubConfigError(
                     f"Model '{name}' port {candidate_port} conflicts with another model or the controller",
                 )
-            if not _is_port_available(host_value, candidate_port):
+            # Skip availability check when reloading with the same port (already bound by current process)
+            if persisted_port != candidate_port and not is_port_available(
+                host_value,
+                candidate_port,
+            ):
                 raise HubConfigError(
                     f"Model '{name}' port {candidate_port} is already in use on host '{host_value}'",
                 )
@@ -342,7 +339,6 @@ def load_hub_config(
     MLXHubConfig
         The loaded and validated hub configuration.
     """
-
     if config_path is None:
         path = DEFAULT_HUB_CONFIG_PATH
     else:
@@ -376,6 +372,9 @@ def load_hub_config(
         source_path=path,
     )
 
+    # Ensure log directory exists
+    hub.log_path.mkdir(parents=True, exist_ok=True)
+
     hub.groups = _build_groups(data.get("groups"))
     group_lookup = {group.name: group for group in hub.groups}
 
@@ -396,7 +395,7 @@ def load_hub_config(
         model.enable_status_page = hub.enable_status_page
 
     logger.info(
-        f"Loaded hub config from {path} with {len(hub.models)} model(s) and {len(hub.groups)} group(s)"
+        f"Loaded hub config from {path} with {len(hub.models)} model(s) and {len(hub.groups)} group(s)",
     )
     return hub
 
@@ -421,47 +420,9 @@ def _allocate_port(
 ) -> tuple[int, int]:
     port = max(starting_port, PORT_MIN)
     while port <= PORT_MAX:
-        if port not in reserved_ports and _is_port_available(host, port):
+        if port not in reserved_ports and is_port_available(host, port):
             return port, port + 1
         port += 1
     raise HubConfigError(
         f"Unable to find an available port for model '{name}' starting at {starting_port}",
     )
-
-
-def _is_port_available(host: str, port: int) -> bool:
-    family = socket.AF_INET6 if _is_ipv6_host(host) else socket.AF_INET
-    bind_host = _normalize_host_for_binding(host, family)
-    sock: socket.socket | None = None
-    try:
-        sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        bind_address = (bind_host, port, 0, 0) if family == socket.AF_INET6 else (bind_host, port)
-        sock.bind(bind_address)
-    except OSError:
-        return False
-    finally:
-        if sock is not None:
-            with suppress(Exception):
-                sock.close()
-    return True
-
-
-def _is_ipv6_host(host: str) -> bool:
-    value = host.strip()
-    if value.startswith("[") and value.endswith("]"):
-        value = value[1:-1]
-    return ":" in value and not value.count(".")
-
-
-def _normalize_host_for_binding(host: str, family: int) -> str:
-    value = host.strip()
-    if not value:
-        return "::" if family == socket.AF_INET6 else DEFAULT_BIND_HOST
-    if family == socket.AF_INET6 and value.startswith("[") and value.endswith("]"):
-        return value[1:-1]
-    if family == socket.AF_INET6:
-        return value
-    if value == "::":
-        return DEFAULT_BIND_HOST
-    return value

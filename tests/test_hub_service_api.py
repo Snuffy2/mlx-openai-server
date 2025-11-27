@@ -145,7 +145,8 @@ class _StubController:
 
 @pytest.fixture
 def hub_service_app(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[TestClient, _StubServiceState, _StubController]:
     """Return a TestClient configured with a stubbed hub service backend."""
     config_dir = tmp_path / "hub-config"
@@ -164,7 +165,7 @@ models:
     model_path: /models/beta
     model_type: lm
     group: test
-""".strip()
+""".strip(),
     )
 
     app = FastAPI()
@@ -183,13 +184,18 @@ models:
             "pid": 111,
             "group": "default",
             "log_path": "/tmp/alpha.log",
-        }
+        },
     ]
 
     _StubServiceClient.state = state
 
     async def _stub_call(
-        config: Any, method: str, path: str, *, json: Any | None = None, timeout: float = 5.0
+        config: Any,
+        method: str,
+        path: str,
+        *,
+        json: Any | None = None,
+        timeout: float = 5.0,
     ) -> dict[str, Any]:
         # Emulate the daemon HTTP surface used by the routes.
         if method == "GET" and path == "/health":
@@ -264,7 +270,7 @@ def test_hub_status_uses_service_snapshot(
     assert controller.reload_count == 1
 
 
-def test_hub_status_degrades_when_service_unavailable(
+def test_hub_status_ok_when_service_unavailable_and_controller_available(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Hub status should be ok when controller is available, even if service is offline."""
@@ -296,7 +302,7 @@ def test_hub_model_start_surfaces_capacity_errors(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Capacity errors from controller should translate to HTTP 429 responses."""
-    client, state, controller = hub_service_app
+    client, state, _controller = hub_service_app
     state.available = True
 
     response = client.post("/hub/models/saturated/start", json={})
@@ -332,7 +338,6 @@ def test_hub_service_stop_handles_missing_manager(
     hub_service_app : tuple[TestClient, _StubServiceState, _StubController]
         Fixture providing the test client and stubs.
     """
-
     client, state, _controller = hub_service_app
     state.available = False
 
@@ -355,7 +360,6 @@ def test_hub_service_stop_shuts_down_manager_when_available(
     hub_service_app : tuple[TestClient, _StubServiceState, _StubController]
         Fixture providing the test client and stubs.
     """
-
     client, state, _controller = hub_service_app
     state.available = True
 
@@ -373,7 +377,6 @@ def test_hub_service_reload_endpoint_returns_diff(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """/hub/service/reload should surface the diff returned by the service."""
-
     client, state, controller = hub_service_app
     state.available = True
 
@@ -394,7 +397,6 @@ def test_hub_load_model_invokes_controller(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """/hub/models/{model}/load should call the controller."""
-
     client, _state, controller = hub_service_app
 
     response = client.post("/hub/models/alpha/load", json={"reason": "dashboard"})
@@ -407,7 +409,6 @@ def test_hub_memory_actions_surface_controller_errors(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Controller-originated failures should propagate to the client."""
-
     client, _state, controller = hub_service_app
 
     response = client.post("/hub/models/denied/load", json={})
@@ -424,7 +425,6 @@ def test_vram_admin_endpoints_invoke_registry(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Admin VRAM endpoints should call the ModelRegistry on app.state."""
-
     client, _state, _controller = hub_service_app
 
     class _StubRegistry:
@@ -433,7 +433,11 @@ def test_vram_admin_endpoints_invoke_registry(
             self.unloaded: list[str] = []
 
         async def request_vram_load(
-            self, name: str, *, force: bool = False, timeout: float | None = None
+            self,
+            name: str,
+            *,
+            force: bool = False,
+            timeout: float | None = None,
         ) -> None:
             if name == "denied":
                 # Simulate a validation error
@@ -461,12 +465,15 @@ def test_vram_admin_endpoints_surface_registry_errors(
     hub_service_app: tuple[TestClient, _StubServiceState, _StubController],
 ) -> None:
     """Registry errors should propagate as HTTP responses from the VRAM endpoints."""
-
     client, _state, _controller = hub_service_app
 
     class _StubRegistryErr:
         async def request_vram_load(
-            self, name: str, *, force: bool = False, timeout: float | None = None
+            self,
+            name: str,
+            *,
+            force: bool = False,
+            timeout: float | None = None,
         ) -> None:
             raise HTTPException(status_code=HTTPStatus.TOO_MANY_REQUESTS, detail="group busy")
 

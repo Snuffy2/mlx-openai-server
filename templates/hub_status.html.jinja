@@ -139,6 +139,7 @@
         .action-btn[disabled] {
             opacity: 0.4;
             cursor: not-allowed;
+            pointer-events: none;
         }
         .toast {
             position: fixed;
@@ -257,7 +258,7 @@
             </thead>
             <tbody id="models-body">
                 <tr>
-                    <td colspan="8" class="muted">Fetching hub snapshot…</td>
+                    <td colspan="9" class="muted">Fetching hub snapshot…</td>
                 </tr>
             </tbody>
         </table>
@@ -374,7 +375,7 @@
         function renderModels(models) {
             const body = document.getElementById('models-body');
             if (!models || models.length === 0) {
-                body.innerHTML = '<tr><td colspan="9">No models registered.</td></tr>';
+                body.innerHTML = '<tr><td colspan="9" class="muted">No models registered.</td></tr>';
                 return;
             }
             body.innerHTML = models
@@ -465,6 +466,7 @@
         }
 
         let toastTimeoutId;
+        let serviceListenerAttached = false;
         function showToast(message, tone = 'success') {
             const toast = document.getElementById('toast');
             toast.textContent = message;
@@ -479,21 +481,24 @@
         }
 
         function attachModelActionListeners() {
-            const buttons = document.querySelectorAll('[data-action]');
-            buttons.forEach((button) => {
-                button.addEventListener('click', onModelActionClick);
-            });
+            const table = document.getElementById('models-body').closest('table');
+            if (table && !table.hasAttribute('data-model-listener-attached')) {
+                table.addEventListener('click', onModelActionClick);
+                table.setAttribute('data-model-listener-attached', 'true');
+            }
         }
 
         function attachServiceActionListeners() {
-            const buttons = document.querySelectorAll('[data-service-action]');
-            buttons.forEach((button) => {
-                button.addEventListener('click', onServiceActionClick);
-            });
+            if (!serviceListenerAttached) {
+                document.addEventListener('click', onServiceActionClick);
+                serviceListenerAttached = true;
+            }
         }
 
         async function onModelActionClick(event) {
-            const button = event.currentTarget;
+            const button = event.target.closest('[data-action]');
+            if (!button) return;
+
             const model = button.getAttribute('data-model');
             const action = button.getAttribute('data-action');
             const normalizedAction = action ? action.replace(/-model$/, '') : action;
@@ -555,7 +560,9 @@
         }
 
         async function onServiceActionClick(event) {
-            const button = event.currentTarget;
+            const button = event.target.closest('[data-service-action]');
+            if (!button) return;
+
             const action = button.getAttribute('data-service-action');
             if (!action || !(action in SERVICE_ENDPOINTS)) {
                 return;

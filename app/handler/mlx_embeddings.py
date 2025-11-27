@@ -6,7 +6,7 @@ import asyncio
 import gc
 from http import HTTPStatus
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 import uuid
 
 from fastapi import HTTPException
@@ -16,9 +16,6 @@ from ..core.queue import RequestQueue
 from ..models.mlx_embeddings import MLX_Embeddings
 from ..schemas.openai import EmbeddingRequest
 from ..utils.errors import create_error_response
-
-if TYPE_CHECKING:
-    from ..core.manager_protocol import ManagerProtocol  # noqa: F401
 
 
 class MLXEmbeddingsHandler:
@@ -54,7 +51,7 @@ class MLXEmbeddingsHandler:
                     "object": "model",
                     "created": self.model_created,
                     "owned_by": "local",
-                }
+                },
             ]
         except Exception as e:
             logger.error(f"Error getting models. {type(e).__name__}: {e}")
@@ -129,7 +126,8 @@ class MLXEmbeddingsHandler:
             # Check if the request is for embeddings
             if request_data.get("type") == "embeddings":
                 result = self.model(
-                    texts=request_data["input"], max_length=request_data.get("max_length", 512)
+                    texts=request_data["input"],
+                    max_length=request_data.get("max_length", 512),
                 )
                 # Force garbage collection after embeddings
                 gc.collect()

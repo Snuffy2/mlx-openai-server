@@ -16,7 +16,6 @@ from app.hub.config import MLXHubConfig
 @pytest.fixture
 def hub_config_file(tmp_path: Path) -> Path:
     """Write a minimal hub.yaml used for CLI tests."""
-
     config = tmp_path / "hub.yaml"
     log_dir = tmp_path / "logs"
     config.write_text(
@@ -26,7 +25,7 @@ models:
   - name: alpha
     model_path: /models/a
     model_type: lm
-""".strip()
+""".strip(),
     )
     return config
 
@@ -58,10 +57,10 @@ class _StubServiceClient:
 
 
 def test_hub_reload_cli_reloads_service(
-    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+    monkeypatch: pytest.MonkeyPatch,
+    hub_config_file: Path,
 ) -> None:
     """`hub reload` should trigger a service reload via HubServiceClient."""
-
     stub = _StubServiceClient()
 
     def _call_stub(
@@ -88,10 +87,10 @@ def test_hub_reload_cli_reloads_service(
 
 
 def test_hub_stop_cli_requests_shutdown(
-    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+    monkeypatch: pytest.MonkeyPatch,
+    hub_config_file: Path,
 ) -> None:
     """`hub stop` should reload config then shut down the service."""
-
     stub = _StubServiceClient()
 
     def _call_stub(
@@ -134,10 +133,10 @@ def test_hub_stop_cli_requests_shutdown(
 
 
 def test_hub_start_model_cli_uses_service_client(
-    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+    monkeypatch: pytest.MonkeyPatch,
+    hub_config_file: Path,
 ) -> None:
     """`hub start-model` should instruct the HubServiceClient to start models."""
-
     stub = _StubServiceClient()
 
     def _call_stub(
@@ -169,10 +168,10 @@ def test_hub_start_model_cli_uses_service_client(
 
 
 def test_hub_stop_model_cli_uses_service_client(
-    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+    monkeypatch: pytest.MonkeyPatch,
+    hub_config_file: Path,
 ) -> None:
     """`hub stop-model` should request stop_model for the provided names."""
-
     stub = _StubServiceClient()
 
     def _call_stub(
@@ -205,7 +204,6 @@ def test_hub_stop_model_cli_uses_service_client(
 
 def test_hub_start_model_cli_requires_model_names(hub_config_file: Path) -> None:
     """The CLI should fail fast if no model names are provided."""
-
     runner = CliRunner()
     result = runner.invoke(cli, ["hub", "--config", str(hub_config_file), "start-model"])
 
@@ -216,7 +214,6 @@ def test_hub_start_model_cli_requires_model_names(hub_config_file: Path) -> None
 
 def test_render_watch_table_formats_columns() -> None:
     """The watch table helper should render sorted, columnized rows."""
-
     models = [
         {
             "name": "beta",
@@ -249,15 +246,14 @@ def test_render_watch_table_formats_columns() -> None:
 
 def test_render_watch_table_handles_empty_payload() -> None:
     """The watch table helper should gracefully render empty snapshots."""
-
     assert _render_watch_table([], now=0) == "  (no managed processes)"
 
 
 def test_hub_load_model_cli_calls_controller(
-    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+    monkeypatch: pytest.MonkeyPatch,
+    hub_config_file: Path,
 ) -> None:
     """`hub load-model` should delegate to the controller helper."""
-
     captured: list[tuple[tuple[str, ...], str]] = []
 
     def _fake_run_actions(_config: object, names: tuple[str, ...], action: str) -> None:
@@ -283,7 +279,8 @@ def test_hub_load_model_cli_calls_controller(
 
 
 def test_hub_unload_model_cli_surfaces_errors(
-    monkeypatch: pytest.MonkeyPatch, hub_config_file: Path
+    monkeypatch: pytest.MonkeyPatch,
+    hub_config_file: Path,
 ) -> None:
     """`hub unload-model` should propagate helper failures as CLI errors."""
 

@@ -20,7 +20,6 @@ from app.server import create_lifespan
 
 def test_lifespan_respects_jit_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """When JIT is disabled the handler is loaded during lifespan startup."""
-
     called = {"count": 0}
 
     async def fake_instantiate(cfg: MLXServerConfig) -> object:
@@ -46,7 +45,6 @@ def test_lifespan_respects_jit_disabled(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_lifespan_respects_jit_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """When JIT is enabled the handler is not loaded at startup."""
-
     called = {"count": 0}
 
     async def fake_instantiate(cfg: MLXServerConfig) -> object:
@@ -77,7 +75,6 @@ def test_lifespan_with_fake_handler_ensure_vram_and_cleanup(
     `ensure_vram_loaded` is invoked via `handler_session` and `cleanup` is called
     on shutdown when JIT is disabled (handler loaded at startup).
     """
-
     calls = {"ensure": 0, "cleanup": 0}
 
     class FakeHandler:
@@ -88,7 +85,10 @@ def test_lifespan_with_fake_handler_ensure_vram_and_cleanup(
             return None
 
         async def ensure_vram_loaded(
-            self, *, force: bool = False, timeout: float | None = None
+            self,
+            *,
+            force: bool = False,
+            timeout: float | None = None,
         ) -> None:
             await asyncio.sleep(0)
             calls["ensure"] += 1
@@ -135,7 +135,6 @@ def test_lifespan_with_fake_handler_ensure_vram_and_cleanup(
 
 def test_jit_triggers_handler_load_on_request(monkeypatch: pytest.MonkeyPatch) -> None:
     """When JIT is enabled, handler should be loaded on first request via handler_manager.ensure_loaded."""
-
     called = {"count": 0}
 
     async def fake_instantiate(cfg: MLXServerConfig) -> object:

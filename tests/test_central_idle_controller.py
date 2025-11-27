@@ -16,6 +16,20 @@ from app.core.model_registry import ModelRegistry
 from app.server import CentralIdleAutoUnloadController
 
 
+async def _wait_for_condition(
+    condition_func: callable[[], bool],
+    timeout: float = 1.0,
+    poll_interval: float = 0.01,
+) -> bool:
+    """Wait for a condition to become true with a bounded timeout."""
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if condition_func():
+            return True
+        await asyncio.sleep(poll_interval)
+    return False
+
+
 class FakeManager:
     """Simple fake manager that tracks unload calls and VRAM state."""
 
@@ -29,7 +43,10 @@ class FakeManager:
         return self._loaded
 
     async def ensure_vram_loaded(
-        self, *, force: bool = False, timeout: float | None = None
+        self,
+        *,
+        force: bool = False,
+        timeout: float | None = None,
     ) -> None:
         """Simulate ensuring VRAM is loaded (idempotent)."""
         await asyncio.sleep(0)
@@ -63,8 +80,11 @@ def test_central_controller_unloads_idle_model() -> None:
         registry.register_activity_notifier(controller.notify_activity)
         controller.start()
 
-        # Give the controller a short moment to run and perform the unload
-        await asyncio.sleep(0.05)
+        # Wait for the controller to unload the model
+        unloaded = await _wait_for_condition(
+            lambda: not registry.get_vram_status("m1")["vram_loaded"],
+        )
+        assert unloaded, "Model should have been unloaded by the controller"
 
         status = registry.get_vram_status("m1")
         assert status["vram_loaded"] is False
@@ -95,11 +115,16 @@ def test_activity_resets_idle_timer() -> None:
 
         # While a session is active, the controller must not unload the model
         async with registry.handler_session("m2") as _m:
+            # Give a moment for any potential unload to occur (it shouldn't)
             await asyncio.sleep(0.05)
             assert mgr.is_vram_loaded() is True
 
         # After session ends, controller should unload promptly
-        await asyncio.sleep(0.05)
+        unloaded = await _wait_for_condition(
+            lambda: not registry.get_vram_status("m2")["vram_loaded"],
+        )
+        assert unloaded, "Model should have been unloaded after session ended"
+
         status = registry.get_vram_status("m2")
         assert status["vram_loaded"] is False
 
@@ -133,13 +158,15 @@ def test_unload_failure_triggers_backoff() -> None:
         registry.register_activity_notifier(controller.notify_activity)
         controller.start()
 
-        # Allow controller to attempt unload; failure should occur once and then backoff
-        await asyncio.sleep(0.05)
+        # Wait for the controller to attempt unload once (should fail)
+        first_attempt = await _wait_for_condition(lambda: calls["count"] >= 1)
+        assert first_attempt, "Controller should have attempted to unload the model"
         assert calls["count"] == 1
 
         # Short wait to ensure no immediate retry (backoff applied)
-        await asyncio.sleep(0.05)
-        assert calls["count"] == 1
+        # Wait a bit longer than the backoff period to ensure no retry
+        await asyncio.sleep(0.2)
+        assert calls["count"] == 1, "No retry should occur during backoff period"
 
         await controller.stop()
 
@@ -149,14 +176,13 @@ def test_unload_failure_triggers_backoff() -> None:
 @pytest.mark.asyncio
 async def test_central_controller_unloads_idle_model_with_fake_registry() -> None:
     """Central controller should call registry.request_vram_unload for idle models."""
-
     unloaded = asyncio.Event()
 
     class FakeRegistry:
         def list_models(self) -> list[dict]:
             return [{"id": "m1", "metadata": {"auto_unload_minutes": 0}}]
 
-        def get_vram_status(self, model_id: str) -> dict:
+        def get_vram_status(self, _model_id: str) -> dict:
             return {
                 "vram_loaded": True,
                 "vram_last_load_ts": time.time() - 3600,
@@ -164,10 +190,10 @@ async def test_central_controller_unloads_idle_model_with_fake_registry() -> Non
                 "active_requests": 0,
             }
 
-        def get_handler(self, model_id: str) -> None:
+        def get_handler(self, _model_id: str) -> None:
             return None
 
-        async def request_vram_unload(self, model_id: str) -> None:
+        async def request_vram_unload(self, _model_id: str) -> None:
             unloaded.set()
 
     registry = FakeRegistry()
@@ -183,7 +209,6 @@ async def test_central_controller_unloads_idle_model_with_fake_registry() -> Non
 @pytest.mark.asyncio
 async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
     """Calling notify_activity should prevent immediate unload when activity is recent."""
-
     unloaded = asyncio.Event()
 
     class FakeHandler:
@@ -202,7 +227,7 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def list_models(self) -> list[dict]:
             return [{"id": "m1", "metadata": {"auto_unload_minutes": 1}}]
 
-        def get_vram_status(self, model_id: str) -> dict:
+        def get_vram_status(self, _model_id: str) -> dict:
             return {
                 "vram_loaded": True,
                 "vram_last_load_ts": time.time() - 3600,
@@ -210,10 +235,10 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
                 "active_requests": 0,
             }
 
-        def get_handler(self, model_id: str) -> FakeHandler:
+        def get_handler(self, _model_id: str) -> FakeHandler:
             return handler
 
-        async def request_vram_unload(self, model_id: str) -> None:
+        async def request_vram_unload(self, _model_id: str) -> None:
             unloaded.set()
 
     registry = FakeRegistry()

@@ -72,7 +72,7 @@ class MLXServerConfig:
     trust_remote_code: bool = DEFAULT_TRUST_REMOTE_CODE
     jit_enabled: bool = DEFAULT_JIT_ENABLED
     auto_unload_minutes: int | None = DEFAULT_AUTO_UNLOAD_MINUTES
-    name: str | None = DEFAULT_CONFIG_NAME
+    name: str | None = None
     group: str | None = DEFAULT_GROUP
     is_default_model: bool = DEFAULT_IS_DEFAULT_MODEL
     enable_status_page: bool = DEFAULT_ENABLE_STATUS_PAGE
@@ -98,7 +98,6 @@ class MLXServerConfig:
         - Validate that ``auto_unload_minutes`` is positive when set.
         - Normalize ``log_level`` to uppercase.
         """
-
         # Process comma-separated LoRA paths and scales into lists (or None)
         if self.lora_paths_str:
             self.lora_paths = [p.strip() for p in self.lora_paths_str.split(",") if p.strip()]
@@ -119,18 +118,18 @@ class MLXServerConfig:
             logger.warning(
                 f"Config name parameter '{self.config_name}' provided but model type is '{self.model_type}'. "
                 "Config name is only used with image-generation "
-                "and image-edit models."
+                "and image-edit models.",
             )
         elif self.model_type == "image-generation" and not self.config_name:
             logger.warning(
                 "Model type is 'image-generation' but no config name "
-                "specified. Using default 'flux-schnell'."
+                "specified. Using default 'flux-schnell'.",
             )
             self.config_name = "flux-schnell"
         elif self.model_type == "image-edit" and not self.config_name:
             logger.warning(
                 "Model type is 'image-edit' but no config name "
-                "specified. Using default 'flux-kontext-dev'."
+                "specified. Using default 'flux-kontext-dev'.",
             )
             self.config_name = "flux-kontext-dev"
 

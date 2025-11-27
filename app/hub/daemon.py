@@ -14,7 +14,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import os
 from pathlib import Path
-import socket
 import time
 from typing import Any, cast
 
@@ -35,23 +34,13 @@ from ..const import (
 )
 from ..core.model_registry import ModelRegistry
 from ..server import LazyHandlerManager, MLXHandler, configure_fastapi_app
+from ..utils.network import is_port_available
 from .config import MLXHubConfig, load_hub_config
 
 
 def create_app_with_config(config_path: str) -> FastAPI:
     """Create FastAPI app with specific config path (for uvicorn factory)."""
     return create_app(config_path)
-
-
-def _is_port_available(port: int) -> bool:
-    """Check if a port is available for binding."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            return False
-        else:
-            return True
 
 
 @dataclass
@@ -111,13 +100,24 @@ class HubSupervisor:
         # Populate model records from hub_config
         for model in getattr(hub_config, "models", []):
             name = getattr(model, "name", None) or str(model)
+            if name in self._models:
+                existing_record = self._models[name]
+                raise ValueError(
+                    f"Duplicate model name '{name}' detected in hub configuration. "
+                    f"First model: {existing_record.config!r}, "
+                    f"Duplicate model: {model!r}",
+                )
             record = ModelRecord(
                 name=name,
                 config=model,
-                group=getattr(model, "group", None),
-                is_default=getattr(model, "is_default_model", False),
+                group=getattr(model, "group", DEFAULT_GROUP),
+                is_default=getattr(model, "is_default_model", DEFAULT_IS_DEFAULT_MODEL),
                 model_path=getattr(model, "model_path", None),
-                auto_unload_minutes=getattr(model, "auto_unload_minutes", None),
+                auto_unload_minutes=getattr(
+                    model,
+                    "auto_unload_minutes",
+                    DEFAULT_AUTO_UNLOAD_MINUTES,
+                ),
             )
             self._models[name] = record
 
@@ -126,7 +126,6 @@ class HubSupervisor:
 
         The supervisor will attempt to load the handler for the named model.
         """
-
         async with self._lock:
             if name not in self._models:
                 raise HTTPException(status_code=404, detail="model not found")
@@ -141,14 +140,16 @@ class HubSupervisor:
                     model_path=str(
                         getattr(record.config, "model_path", None)
                         or getattr(record.config, "model", None)
-                        or ""
+                        or "",
                     ),
                     model_type=getattr(record.config, "model_type", None) or DEFAULT_MODEL_TYPE,
                     host=getattr(record.config, "host", DEFAULT_API_HOST),
                     port=getattr(record.config, "port", None) or 0,
                     jit_enabled=bool(getattr(record.config, "jit_enabled", DEFAULT_JIT_ENABLED)),
                     auto_unload_minutes=getattr(
-                        record.config, "auto_unload_minutes", DEFAULT_AUTO_UNLOAD_MINUTES
+                        record.config,
+                        "auto_unload_minutes",
+                        DEFAULT_AUTO_UNLOAD_MINUTES,
                     ),
                     name=getattr(record.config, "name", None)
                     or getattr(record.config, "model_name", None),
@@ -182,7 +183,6 @@ class HubSupervisor:
         HTTPException
             If the model is not found.
         """
-
         async with self._lock:
             if name not in self._models:
                 raise HTTPException(status_code=404, detail="model not found")
@@ -194,16 +194,24 @@ class HubSupervisor:
             if unloaded:
                 logger.info(f"Unloaded model {name}")
                 record.manager = None  # Clear the manager so the model is fully stopped
+                # Update registry to reflect the stopped state
+                if self.registry and record.model_path is not None:
+                    try:
+                        await self.registry.update_model_state(record.model_path, handler=None)
+                    except Exception as e:
+                        logger.warning(f"Failed to update registry for stopped model {name}: {e}")
                 return {"status": "stopped", "name": name}
             return {"status": "not_running", "name": name}
 
-    async def get_handler(self, name: str) -> MLXHandler | None:
+    async def get_handler(self, name: str, reason: str = "request") -> MLXHandler | None:
         """Get the current handler for a model, loading it if necessary.
 
         Parameters
         ----------
         name : str
             The model name.
+        reason : str, default "request"
+            Reason for loading the handler (for logging/debugging).
 
         Returns
         -------
@@ -214,21 +222,20 @@ class HubSupervisor:
             record = self._models.get(name)
             if record is None or record.manager is None:
                 return None
-            return await record.manager.ensure_loaded("request")
+            return await record.manager.ensure_loaded(reason)
 
     async def acquire_handler(self, name: str, reason: str = "request") -> MLXHandler | None:
         """Acquire a handler for the given model name.
 
         This is an alias for get_handler for compatibility with hub controller interface.
         """
-        return await self.get_handler(name)
+        return await self.get_handler(name, reason)
 
     async def load_model(self, name: str) -> dict[str, Any]:
         """Ensure a model's handler is loaded into memory.
 
         This loads the handler if not already loaded.
         """
-
         async with self._lock:
             if name not in self._models:
                 raise HTTPException(status_code=404, detail="model not found")
@@ -239,14 +246,16 @@ class HubSupervisor:
             if handler:
                 logger.info(f"Loaded model {name} handler")
                 return {"status": "loaded", "name": name}
-            raise HTTPException(status_code=500, detail="failed to load handler")
+            raise HTTPException(
+                status_code=400,
+                detail="model not started; use start_model first to create the manager",
+            )
 
     async def unload_model(self, name: str) -> dict[str, Any]:
         """Unload a model's handler from memory.
 
         This unloads the handler if loaded.
         """
-
         async with self._lock:
             if name not in self._models:
                 raise HTTPException(status_code=404, detail="model not found")
@@ -265,7 +274,6 @@ class HubSupervisor:
         This implementation performs a best-effort reload: it replaces the
         in-memory hub_config and returns a simple diff.
         """
-
         new_hub = load_hub_config(self.hub_config.source_path)
         old_names = set(self._models.keys())
         new_names = {getattr(m, "name", str(m)) for m in getattr(new_hub, "models", [])}
@@ -292,11 +300,15 @@ class HubSupervisor:
                     existing_record.config = model
                     existing_record.group = getattr(model, "group", DEFAULT_GROUP)
                     existing_record.is_default = getattr(
-                        model, "is_default_model", DEFAULT_IS_DEFAULT_MODEL
+                        model,
+                        "is_default_model",
+                        DEFAULT_IS_DEFAULT_MODEL,
                     )
                     existing_record.model_path = getattr(model, "model_path", None)
                     existing_record.auto_unload_minutes = getattr(
-                        model, "auto_unload_minutes", DEFAULT_AUTO_UNLOAD_MINUTES
+                        model,
+                        "auto_unload_minutes",
+                        DEFAULT_AUTO_UNLOAD_MINUTES,
                     )
                     record = existing_record
                 else:
@@ -307,7 +319,9 @@ class HubSupervisor:
                         is_default=getattr(model, "is_default_model", DEFAULT_IS_DEFAULT_MODEL),
                         model_path=getattr(model, "model_path", None),
                         auto_unload_minutes=getattr(
-                            model, "auto_unload_minutes", DEFAULT_AUTO_UNLOAD_MINUTES
+                            model,
+                            "auto_unload_minutes",
+                            DEFAULT_AUTO_UNLOAD_MINUTES,
                         ),
                     )
                 self._models[name] = record
@@ -322,7 +336,6 @@ class HubSupervisor:
         The returned dict includes a `timestamp` and a `models` list where
         each model object contains keys used by the CLI and status UI.
         """
-
         snapshot: dict[str, Any] = {
             "timestamp": time.time(),
             "models": [],
@@ -342,9 +355,17 @@ class HubSupervisor:
                     "is_default_model": rec.is_default,
                     "model_path": rec.model_path,
                     "auto_unload_minutes": rec.auto_unload_minutes,
-                }
+                },
             )
         return snapshot
+
+    def add_background_task(self, task: asyncio.Task[None]) -> None:
+        """Add a background task to be tracked by the supervisor."""
+        self._bg_tasks.append(task)
+
+    def remove_background_task(self, task: asyncio.Task[None]) -> None:
+        """Remove a background task from tracking."""
+        self._bg_tasks.remove(task)
 
     async def shutdown_all(self) -> None:
         """Gracefully stop all supervised model processes.
@@ -352,15 +373,60 @@ class HubSupervisor:
         This performs a best-effort shutdown of each supervised process and
         logs failures without raising to the caller.
         """
-
         logger.info("Shutting down all supervised model handlers")
         async with self._lock:
             names = list(self._models.keys())
         for name in names:
             try:
                 await self.stop_model(name)
-            except Exception as exc:  # pragma: no cover - best-effort shutdown
-                logger.exception(f"Error stopping model {name}: {exc}")
+            except Exception as e:  # pragma: no cover - best-effort shutdown
+                logger.exception(f"Error stopping model {name}: {e}")
+
+
+async def _schedule_default_model_starts(supervisor: HubSupervisor) -> None:
+    """Schedule auto-start tasks for default models."""
+    try:
+        # Iterate the configured models so we can read their JIT flag
+        for model in getattr(supervisor.hub_config, "models", []):
+            try:
+                if not getattr(model, "is_default_model", False):
+                    continue
+                name = getattr(model, "name", None)
+                if not name:
+                    continue
+
+                async def _autostart(cfg_model: Any) -> None:
+                    mname = getattr(cfg_model, "name", "<unknown>")
+                    try:
+                        # Always attempt to start a supervised handler
+                        # for default models. The handler will decide
+                        # whether to eagerly load based on JIT configuration.
+                        await supervisor.start_model(mname)
+                        logger.info(f"Auto-started model handler: {mname}")
+                    except Exception as e:  # pragma: no cover - best-effort
+                        # Starting the supervised handler failed; log the failure and continue.
+                        logger.warning(f"Failed to auto-start model handler '{mname}': {e}")
+
+                t = asyncio.create_task(_autostart(model))
+                supervisor.add_background_task(t)
+
+                def _cleanup_task(
+                    fut: asyncio.Task[None],
+                    model_name: str = getattr(model, "name", "<unknown>"),
+                ) -> None:
+                    supervisor.remove_background_task(fut)
+                    if fut.exception():
+                        logger.exception(
+                            f"Autostart task failed for {model_name}",
+                            exc_info=fut.exception(),
+                        )
+
+                t.add_done_callback(_cleanup_task)
+                logger.info(f"Scheduled auto-start for default model: {name}")
+            except Exception as e:  # pragma: no cover - best-effort
+                logger.warning(f"Failed to schedule auto-start for model entry {model!r}: {e}")
+    except Exception as e:  # pragma: no cover - defensive
+        logger.exception(f"Error while scheduling default model starts: {e}")
 
 
 def create_app(hub_config_path: str | None = None) -> FastAPI:
@@ -385,45 +451,15 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         # Startup
         logger.info("Hub daemon starting up")
 
-        # Check if the default port is available
-        if not _is_port_available(DEFAULT_PORT):
+        # Check if the configured port is available
+        configured_port = getattr(hub_config, "port", DEFAULT_PORT)
+        if not is_port_available(port=configured_port):
             raise RuntimeError(
-                f"Port {DEFAULT_PORT} is already in use. Please stop the service using that port."
+                f"Port {configured_port} is already in use. Please stop the service using that port.",
             )
 
-        # Auto-start models marked as default in configuration. Schedule
-        # start operations as background tasks so the daemon becomes
-        # responsive quickly while model processes spin up.
-        try:
-            # Iterate the configured models so we can read their JIT flag
-            for model in getattr(supervisor.hub_config, "models", []):
-                try:
-                    if not getattr(model, "is_default_model", False):
-                        continue
-                    name = getattr(model, "name", None)
-                    if not name:
-                        continue
-
-                    async def _autostart(cfg_model: Any) -> None:
-                        mname = getattr(cfg_model, "name", "<unknown>")
-                        try:
-                            # Always attempt to start a supervised handler
-                            # for default models. The handler will decide
-                            # whether to eagerly load based on JIT configuration.
-                            await supervisor.start_model(mname)
-                            logger.info(f"Auto-started model handler: {mname}")
-                        except Exception as exc:  # pragma: no cover - best-effort
-                            # Starting the supervised handler failed; log the failure and continue.
-                            logger.warning(f"Failed to auto-start model handler '{mname}': {exc}")
-
-                    asyncio.create_task(_autostart(model))
-                    logger.info(f"Scheduled auto-start for default model: {name}")
-                except Exception as exc:  # pragma: no cover - best-effort
-                    logger.warning(
-                        f"Failed to schedule auto-start for model entry {model!r}: {exc}"
-                    )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception(f"Error while scheduling default model starts: {exc}")
+        # Auto-start models marked as default in configuration
+        await _schedule_default_model_starts(supervisor)
 
         # Yield to start serving requests while background tasks proceed
         yield
@@ -441,8 +477,8 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
                 try:
                     runtime_file.unlink()
                     logger.debug(f"Removed hub runtime state file: {runtime_file}")
-                except Exception as exc:  # pragma: no cover - best-effort cleanup
-                    logger.warning(f"Failed to remove hub runtime state file {runtime_file}: {exc}")
+                except Exception as e:  # pragma: no cover - best-effort cleanup
+                    logger.warning(f"Failed to remove hub runtime state file {runtime_file}: {e}")
         except Exception:
             # Defensive: do not allow cleanup failures to raise during shutdown
             logger.debug("Error while attempting to clean up runtime state file")
@@ -556,6 +592,6 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
             "models": models,
             "timestamp": ts_str,
         }
-        return templates.TemplateResponse("hub_status.html", context)
+        return templates.TemplateResponse("hub_status.html.jinja", context)
 
     return app

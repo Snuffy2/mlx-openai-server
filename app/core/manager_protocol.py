@@ -23,17 +23,25 @@ class ManagerProtocol(Protocol):
         """Return True when the manager currently has model weights resident in VRAM."""
 
     async def ensure_vram_loaded(
-        self, *, force: bool = False, timeout: float | None = None
+        self,
+        *,
+        force: bool = False,
+        timeout: float | None = None,
     ) -> None:  # pragma: no cover - typing stub
         """Ensure VRAM residency for this manager. Should be idempotent."""
 
     async def release_vram(
-        self, *, timeout: float | None = None
+        self,
+        *,
+        timeout: float | None = None,
     ) -> None:  # pragma: no cover - typing stub
         """Release VRAM resources held by this manager."""
 
     def request_session(
-        self, *, ensure_vram: bool = True, ensure_timeout: float | None = None
+        self,
+        *,
+        ensure_vram: bool = True,
+        ensure_timeout: float | None = None,
     ) -> AbstractAsyncContextManager[Any]:  # pragma: no cover - typing stub
         """Return an async context manager used for per-request sessions.
 

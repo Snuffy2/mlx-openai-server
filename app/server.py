@@ -61,13 +61,15 @@ MLXHandler: TypeAlias = (
 
 # Supported mflux configuration names per feature for centralized validation
 ALLOWED_IMAGE_GENERATION_CONFIGS: frozenset[str] = frozenset(
-    {"flux-schnell", "flux-dev", "flux-krea-dev"}
+    {"flux-schnell", "flux-dev", "flux-krea-dev"},
 )
 ALLOWED_IMAGE_EDIT_CONFIGS: frozenset[str] = frozenset({"flux-kontext-dev"})
 
 
 def configure_logging(
-    log_file: str | None = None, no_log_file: bool = False, log_level: str = "INFO"
+    log_file: str | None = None,
+    no_log_file: bool = False,
+    log_level: str = "INFO",
 ) -> None:
     """Set up loguru handlers used by the server.
 
@@ -130,18 +132,18 @@ def get_model_identifier(config_args: MLXServerConfig) -> str:
     str
         Value that identifies the model for handler initialization.
     """
-
     return config_args.model_path
 
 
 def get_registry_model_id(config_args: MLXServerConfig) -> str:
     """Return the identifier used when registering models with the registry."""
-
     return config_args.name or config_args.model_identifier
 
 
 def validate_mflux_config(
-    config_name: str, allowed_configs: frozenset[str], feature_name: str
+    config_name: str,
+    allowed_configs: frozenset[str],
+    feature_name: str,
 ) -> None:
     """Ensure mflux is available and the provided config name is supported.
 
@@ -159,16 +161,15 @@ def validate_mflux_config(
     ValueError
         Raised when mflux is missing or the configuration name is unsupported.
     """
-
     if not MFLUX_AVAILABLE:
         raise ValueError(
-            f"{feature_name} requires mflux. Install with: pip install git+https://github.com/cubist38/mflux.git"
+            f"{feature_name} requires mflux. Install with: pip install git+https://github.com/cubist38/mflux.git",
         )
 
     if config_name not in allowed_configs:
         allowed_values = ", ".join(sorted(allowed_configs))
         raise ValueError(
-            f"Invalid config name: {config_name}. Supported configs for {feature_name.lower()} are: {allowed_values}."
+            f"Invalid config name: {config_name}. Supported configs for {feature_name.lower()} are: {allowed_values}.",
         )
 
 
@@ -199,7 +200,6 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
     Exception
         If handler initialization fails for any reason.
     """
-
     model_identifier = get_model_identifier(config_args)
     if config_args.model_type == "image-generation":
         logger.info(f"Initializing MLX handler with model name: {model_identifier}")
@@ -237,7 +237,8 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
             )
         elif config_args.model_type == "embeddings":
             handler = MLXEmbeddingsHandler(
-                model_path=model_identifier, max_concurrency=config_args.max_concurrency
+                model_path=model_identifier,
+                max_concurrency=config_args.max_concurrency,
             )
         elif config_args.model_type == "image-edit":
             if config_args.config_name is None:
@@ -257,7 +258,8 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
             )
         elif config_args.model_type == "whisper":
             handler = MLXWhisperHandler(
-                model_path=model_identifier, max_concurrency=config_args.max_concurrency
+                model_path=model_identifier,
+                max_concurrency=config_args.max_concurrency,
             )
         elif config_args.model_type == "lm":
             handler = MLXLMHandler(
@@ -272,7 +274,7 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
         else:
             raise ValueError(
                 f"Invalid model_type: {config_args.model_type!r}. "
-                f"Supported types are: lm, multimodal, image-generation, image-edit, embeddings, whisper"
+                f"Supported types are: lm, multimodal, image-generation, image-edit, embeddings, whisper",
             )
 
         await handler.initialize(
@@ -280,7 +282,7 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
                 "max_concurrency": config_args.max_concurrency,
                 "timeout": config_args.queue_timeout,
                 "queue_size": config_args.queue_size,
-            }
+            },
         )
         logger.info("MLX handler initialized successfully")
     except Exception as e:
@@ -466,7 +468,10 @@ class LazyHandlerManager(ManagerProtocol):
         return self._handler is not None
 
     async def ensure_vram_loaded(
-        self, *, force: bool = False, timeout: float | None = None
+        self,
+        *,
+        force: bool = False,
+        timeout: float | None = None,
     ) -> None:
         """Ensure the handler is loaded (idempotent).
 
@@ -491,7 +496,10 @@ class LazyHandlerManager(ManagerProtocol):
             await coro
 
     def request_session(
-        self, *, ensure_vram: bool = True, ensure_timeout: float | None = None
+        self,
+        *,
+        ensure_vram: bool = True,
+        ensure_timeout: float | None = None,
     ) -> AbstractAsyncContextManager[Any]:
         """Return an async context manager for per-request sessions.
 
@@ -506,7 +514,7 @@ class LazyHandlerManager(ManagerProtocol):
             self.record_activity()
 
             if ensure_vram:
-                coro = self.ensure_vram_loaded(timeout=ensure_timeout)
+                coro = self.ensure_vram_loaded()
                 if ensure_timeout is not None:
                     await asyncio.wait_for(coro, timeout=ensure_timeout)
                 else:
@@ -545,16 +553,16 @@ class LazyHandlerManager(ManagerProtocol):
             try:
                 await asyncio.to_thread(mx.clear_cache)
                 await asyncio.to_thread(gc.collect)
-            except Exception as exc:  # pragma: no cover - best-effort logging
-                logger.warning(f"Background memory cleanup failed. {type(exc).__name__}: {exc}")
+            except Exception as e:  # pragma: no cover - best-effort logging
+                logger.warning(f"Background memory cleanup failed. {type(e).__name__}: {e}")
 
         task = asyncio.create_task(_run())
 
         def _on_complete(done: asyncio.Task[None]) -> None:
             self._background_tasks.discard(done)
-            exc = done.exception()
-            if exc:
-                logger.warning(f"Background memory cleanup raised. {type(exc).__name__}: {exc}")
+            e = done.exception()
+            if e:
+                logger.warning(f"Background memory cleanup raised. {type(e).__name__}: {e}")
 
         self._background_tasks.add(task)
         task.add_done_callback(_on_complete)
@@ -601,6 +609,7 @@ class CentralIdleAutoUnloadController:
 
         The controller uses this to reset timers and wake the watch loop.
         """
+        # model_id is intentionally unused; controller queries registry for current state
         # Wake the loop; controller will query registry for current state
         if self._active:
             self._event.set()
@@ -647,7 +656,8 @@ class CentralIdleAutoUnloadController:
                         # Fall back to metadata extras if present
                         try:
                             meta: dict[str, Any] = next(
-                                (e.get("metadata", {}) for e in entries if e.get("id") == mid), {}
+                                (e.get("metadata", {}) for e in entries if e.get("id") == mid),
+                                {},
                             )
                             minutes = meta.get("auto_unload_minutes")
                         except Exception:
@@ -668,10 +678,16 @@ class CentralIdleAutoUnloadController:
 
                     # If we don't have per-handler idle metric, derive from vram timestamps
                     if idle_elapsed is None:
-                        last_unload = status.get("vram_last_unload_ts") or 0
-                        last_load = status.get("vram_last_load_ts") or 0
-                        last_activity_ts = max(last_load, last_unload)
-                        idle_elapsed = max(0, now - float(last_activity_ts))
+                        last_request = status.get("vram_last_request_ts")
+                        if last_request is not None:
+                            # Prefer actual request activity timestamp
+                            last_activity_ts = float(last_request)
+                        else:
+                            # Fall back to load/unload times if no request activity recorded
+                            last_unload = status.get("vram_last_unload_ts") or 0
+                            last_load = status.get("vram_last_load_ts") or 0
+                            last_activity_ts = max(last_load, last_unload)
+                        idle_elapsed = max(0, now - last_activity_ts)
 
                     if idle_elapsed >= timeout_secs and status.get("vram_loaded", False):
                         try:
@@ -684,7 +700,8 @@ class CentralIdleAutoUnloadController:
                 # Wait for activity or timeout
                 try:
                     await asyncio.wait_for(
-                        self._event.wait(), timeout=self.WATCH_LOOP_MAX_WAIT_SECONDS
+                        self._event.wait(),
+                        timeout=self.WATCH_LOOP_MAX_WAIT_SECONDS,
                     )
                 except TimeoutError:
                     pass
@@ -738,7 +755,6 @@ def create_lifespan(
         app : FastAPI
             The FastAPI application instance.
         """
-
         registry = ModelRegistry()
         # Ensure external code can find the registry via the canonical name
         app.state.registry = registry
@@ -764,7 +780,9 @@ def create_lifespan(
         async def _sync_registry_update(handler: MLXHandler | None) -> None:
             metadata_payload = dict(base_registry_metadata)
             metadata_payload["model_path"] = getattr(
-                handler, "model_path", config_args.model_identifier
+                handler,
+                "model_path",
+                config_args.model_identifier,
             )
             status = "initialized" if handler else "unloaded"
             try:
@@ -774,10 +792,10 @@ def create_lifespan(
                     status=status,
                     metadata_updates=metadata_payload,
                 )
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except Exception as e:  # pragma: no cover - defensive logging
                 logger.warning(
                     f"Failed to synchronize model registry for {registry_model_id}. "
-                    f"{type(exc).__name__}: {exc}"
+                    f"{type(e).__name__}: {e}",
                 )
 
         def _update_model_metadata(handler: MLXHandler | None) -> None:
@@ -791,7 +809,9 @@ def create_lifespan(
             if handler:
                 entry["created"] = getattr(handler, "model_created", int(time.time()))
                 metadata_block["model_path"] = getattr(
-                    handler, "model_path", metadata_block.get("model_path")
+                    handler,
+                    "model_path",
+                    metadata_block.get("model_path"),
                 )
 
         def _update_handler(handler: MLXHandler | None) -> None:
@@ -801,9 +821,9 @@ def create_lifespan(
 
             def _cleanup(done: asyncio.Task[None]) -> None:
                 registry_tasks.discard(done)
-                exc = done.exception()
-                if exc:
-                    logger.warning(f"Registry update task raised. {type(exc).__name__}: {exc}")
+                e = done.exception()
+                if e:
+                    logger.warning(f"Registry update task raised. {type(e).__name__}: {e}")
 
             registry_tasks.add(task)
             task.add_done_callback(_cleanup)
@@ -821,7 +841,7 @@ def create_lifespan(
         # Wire manager-level activity into the central controller so a single
         # controller handles auto-unload decisions for all models.
         handler_manager.set_activity_callback(
-            lambda: central_controller.notify_activity(registry_model_id)
+            lambda: central_controller.notify_activity(registry_model_id),
         )
 
         try:
@@ -882,7 +902,6 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
         A configuration object that can be passed to
         ``uvicorn.Server(config).run()`` to start the application.
     """
-
     # Configure logging based on CLI parameters
     configure_logging(
         log_file=config_args.log_file,
@@ -913,7 +932,7 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
                 "status": "unloaded",
                 "model_path": config_args.model_identifier,
             },
-        }
+        },
     ]
 
     configure_fastapi_app(app)
@@ -935,7 +954,6 @@ def configure_fastapi_app(app: FastAPI) -> None:
     standard single-model server and the hub-aware server so both surfaces
     expose identical middleware, routing, and error handling behavior.
     """
-
     app.include_router(router)
     # Ensure a ModelRegistry is available on the application state so
     # hub-aware endpoints and admin routes can access model metadata
@@ -954,10 +972,10 @@ def configure_fastapi_app(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def add_process_time_header(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         """Attach timing metadata and trigger periodic memory cleanup."""
-
         start_time = time.time()
         response = await call_next(request)
         process_time = time.time() - start_time
@@ -976,7 +994,6 @@ def configure_fastapi_app(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def global_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
         """Log unexpected exceptions and emit a generic payload."""
-
         logger.exception(f"Global exception handler caught. {type(exc).__name__}: {exc}")
         return JSONResponse(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
