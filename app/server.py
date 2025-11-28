@@ -472,14 +472,15 @@ class LazyHandlerManager(ManagerProtocol):
             if self._shutdown:
                 return None
 
-            logger.info(self._format_log_message("Loading model", reason))
+            # Use the bound per-model logger so per-model sinks receive records
+            self._logger.info(self._format_log_message("Loading model", reason))
             handler = await instantiate_handler(self.config_args)
             self._handler = handler
             self.record_activity()
             if self._on_change:
                 self._on_change(handler)
             self._schedule_memory_cleanup()
-            logger.info(self._format_log_message("Model loaded", reason))
+            self._logger.info(self._format_log_message("Model loaded", reason))
             return handler
 
     async def unload(self, reason: str = "manual") -> bool:
@@ -509,9 +510,9 @@ class LazyHandlerManager(ManagerProtocol):
                 self._on_change(None)
 
         try:
-            logger.info(self._format_log_message("Unloading model", reason))
+            self._logger.info(self._format_log_message("Unloading model", reason))
             await handler.cleanup()
-            logger.info(self._format_log_message("Model unloaded", reason))
+            self._logger.info(self._format_log_message("Model unloaded", reason))
         finally:
             mx.clear_cache()
             gc.collect()
