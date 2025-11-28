@@ -316,15 +316,28 @@ def test_vram_admin_endpoints_invoke_registry(
             self,
             name: str,
             *,
-            force: bool = False,
-            timeout: float | None = None,
+            _force: bool = False,
+            _timeout: float | None = None,
+            **kwargs: Any,
         ) -> None:
+            # Accept legacy keyword names for interface compatibility
+            if "force" in kwargs:
+                _force = kwargs.pop("force")
+            if "timeout" in kwargs:
+                _timeout = kwargs.pop("timeout")
+
             if name == "denied":
                 # Simulate a validation error
                 raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="denied")
             self.loaded.append(name)
 
-        async def request_vram_unload(self, name: str, *, timeout: float | None = None) -> None:
+        async def request_vram_unload(
+            self, name: str, *, _timeout: float | None = None, **kwargs: Any
+        ) -> None:
+            # Accept legacy keyword name for interface compatibility
+            if "timeout" in kwargs:
+                _timeout = kwargs.pop("timeout")
+
             if name == "missing":
                 raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="not loaded")
             self.unloaded.append(name)
@@ -352,12 +365,25 @@ def test_vram_admin_endpoints_surface_registry_errors(
             self,
             name: str,
             *,
-            force: bool = False,
-            timeout: float | None = None,
+            _force: bool = False,
+            _timeout: float | None = None,
+            **kwargs: Any,
         ) -> None:
+            # Accept legacy keyword names for interface compatibility
+            if "force" in kwargs:
+                _force = kwargs.pop("force")
+            if "timeout" in kwargs:
+                _timeout = kwargs.pop("timeout")
+
             raise HTTPException(status_code=HTTPStatus.TOO_MANY_REQUESTS, detail="group busy")
 
-        async def request_vram_unload(self, name: str, *, timeout: float | None = None) -> None:
+        async def request_vram_unload(
+            self, name: str, *, _timeout: float | None = None, **kwargs: Any
+        ) -> None:
+            # Accept legacy keyword name for interface compatibility
+            if "timeout" in kwargs:
+                _timeout = kwargs.pop("timeout")
+
             raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="not loaded")
 
     client.app.state.model_registry = _StubRegistryErr()

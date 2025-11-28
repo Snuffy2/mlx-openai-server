@@ -839,7 +839,6 @@ def create_lifespan(
         """
         registry = ModelRegistry()
         # Ensure external code can find the registry via the canonical name
-        app.state.registry = registry
         app.state.model_registry = registry
         registry_model_id = get_registry_model_id(config_args)
         base_registry_metadata = {

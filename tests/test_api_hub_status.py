@@ -29,7 +29,7 @@ def test_build_models_defaults_to_process_state(
 
 
 @pytest.mark.parametrize(
-    "live_entry, expected_status, expected_memory_state, expected_loaded",
+    ("live_entry", "expected_status", "expected_memory_state", "expected_loaded"),
     [
         # No memory info; running process implies memory loaded
         ({"state": "running"}, "running", None, 1),
