@@ -1026,7 +1026,11 @@ def _start_hub_daemon(config: MLXHubConfig) -> subprocess.Popen[bytes] | None:
         if proc.stderr:
             stderr_thread = threading.Thread(
                 target=_log_output,
-                args=(proc.stderr, "error", f"hub-daemon[{proc.pid}].stderr"),
+                args=(
+                    proc.stderr,
+                    "info",
+                    f"hub-daemon[{proc.pid}].stderr",
+                ),  # MLX-LM outputs to stderr so treat as info
                 daemon=True,
             )
             stderr_thread.start()
@@ -1183,11 +1187,22 @@ def hub_stop(ctx: click.Context) -> None:
     try:
         _call_daemon_api(config, "POST", "/hub/reload")
     except click.ClickException as e:
+        # If we can't contact the daemon it's likely not running; be friendly
+        msg = str(e)
+        if "Failed to contact hub daemon" in msg or "Daemon responded" in msg:
+            _flash("Hub manager is not running; nothing to stop", tone="info")
+            return
         raise click.ClickException(f"Config sync failed before shutdown: {e}") from e
+
     try:
         _call_daemon_api(config, "POST", "/hub/shutdown")
     except click.ClickException as e:
+        msg = str(e)
+        if "Failed to contact hub daemon" in msg:
+            _flash("Hub manager is not running; nothing to stop", tone="info")
+            return
         raise click.ClickException(f"Hub shutdown failed: {e}") from e
+
     _flash("Hub manager shutdown requested", tone="success")
 
 

@@ -30,9 +30,10 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 import gc
 from http import HTTPStatus
+from pathlib import Path
 import sys
 import time
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,7 +93,22 @@ def configure_logging(
     """
     logger.remove()  # Remove default handler
 
-    # Add console handler
+    # Ensure log directory exists when a file path is specified (or default)
+    if log_file:
+        with suppress(Exception):
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    else:
+        with suppress(Exception):
+            Path("logs").mkdir(parents=True, exist_ok=True)
+
+    # Add console handler. Exclude records that are specific to a model
+    # (they will be written to per-model log files instead).
+    def _global_filter(record: dict[str, Any]) -> bool:  # pragma: no cover - tiny helper
+        try:
+            return record.get("extra", {}).get("model") is None
+        except Exception:
+            return True
+
     logger.add(
         sys.stdout,
         level=log_level,
@@ -101,15 +117,21 @@ def configure_logging(
         "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
         "✦ <level>{message}</level>",
         colorize=True,
+        enqueue=True,
+        filter=cast("Callable[[Any], bool]", _global_filter),
     )
     if not no_log_file:
         file_path = log_file if log_file else "logs/app.log"
+        with suppress(Exception):
+            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         logger.add(
             file_path,
             rotation="500 MB",
             retention="10 days",
             level=log_level,
             format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            enqueue=True,
+            filter=cast("Callable[[Any], bool]", _global_filter),
         )
 
 
@@ -323,6 +345,47 @@ class LazyHandlerManager(ManagerProtocol):
         self._on_activity = on_activity
         self._last_activity = time.monotonic()
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Optional per-model log sink id (registered with loguru)
+        # Bound logger for manager-scoped messages (adds `model` extra)
+        bound_model_name = getattr(self.config_args, "name", None) or getattr(
+            self.config_args, "model_identifier", None
+        )
+        self._logger = logger.bind(model=bound_model_name) if bound_model_name else logger
+        self._log_sink_id: int | None = None
+
+        # If model-level file logging is enabled, add a dedicated sink
+        log_file: str | None = getattr(self.config_args, "log_file", None)
+        if not getattr(self.config_args, "no_log_file", False) and log_file:
+            try:
+                # Ensure parent dir exists
+                with suppress(Exception):
+                    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+                model_name: str | None = getattr(self.config_args, "name", None) or getattr(
+                    self.config_args, "model_identifier", None
+                )
+
+                # Add a model-specific file sink that only receives records
+                # bound to this model via the `model` extra.
+                def _model_filter(record: dict[str, Any]) -> bool:  # pragma: no cover - tiny helper
+                    try:
+                        extra = record.get("extra", {})
+                        if not isinstance(extra, dict):
+                            return False
+                        # Cast final result to bool to avoid returning Any
+                        return bool(extra.get("model") == model_name)
+                    except Exception:
+                        return False
+
+                self._log_sink_id = logger.add(
+                    log_file,
+                    level=getattr(self.config_args, "log_level", "INFO"),
+                    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+                    enqueue=True,
+                    filter=cast("Callable[[Any], bool]", _model_filter),
+                )
+            except Exception:  # pragma: no cover - best-effort logging
+                # Log the exception with the bound logger so model context is preserved
+                self._logger.exception("Failed to add model log sink")
 
         if self._on_change:
             self._on_change(None)
@@ -461,6 +524,9 @@ class LazyHandlerManager(ManagerProtocol):
         """
         self._shutdown = True
         await self.unload("shutdown")
+        # Remove any per-model log sink when the manager is shut down
+        with suppress(Exception):
+            self.remove_log_sink()
 
     # ManagerProtocol adapter methods -------------------------------------------------
     def is_vram_loaded(self) -> bool:
@@ -527,6 +593,21 @@ class LazyHandlerManager(ManagerProtocol):
                 self.record_activity()
 
         return _session()
+
+    def remove_log_sink(self) -> None:
+        """Remove per-model log sink if one was registered.
+
+        This is intentionally best-effort: failures to remove the sink are
+        logged but do not raise.
+        """
+        if self._log_sink_id is None:
+            return
+        try:
+            logger.remove(self._log_sink_id)
+        except Exception as e:  # pragma: no cover - best-effort cleanup
+            logger.warning(f"Failed to remove model log sink: {e}")
+        finally:
+            self._log_sink_id = None
 
     def _format_log_message(self, action: str, reason: str) -> str:
         """Format a log message with model identifier.

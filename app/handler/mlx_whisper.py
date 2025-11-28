@@ -170,7 +170,14 @@ class MLXWhisperHandler:
                         model=self.model_path,
                         choices=[
                             TranscriptionResponseStreamChoice(
-                                delta=Delta(content=chunk.get("text", "")),  # type: ignore[call-arg]
+                                delta=Delta(
+                                    content=chunk.get("text", ""),
+                                    function_call=None,
+                                    refusal=None,
+                                    role=None,
+                                    tool_calls=None,
+                                    reasoning_content=None,
+                                ),
                                 finish_reason=None,
                             ),
                         ],
@@ -189,8 +196,16 @@ class MLXWhisperHandler:
                 model=self.model_path,
                 choices=[
                     TranscriptionResponseStreamChoice(
-                        delta=Delta(content=""), finish_reason="stop"
-                    ),  # type: ignore[call-arg]
+                        delta=Delta(
+                            content="",
+                            function_call=None,
+                            refusal=None,
+                            role=None,
+                            tool_calls=None,
+                            reasoning_content=None,
+                        ),
+                        finish_reason="stop",
+                    ),
                 ],
             )
             yield f"data: {final_response.model_dump_json()}\n\n"

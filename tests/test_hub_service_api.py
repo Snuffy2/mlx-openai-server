@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.api.hub_routes import HubServiceError, hub_router
+from app.core.model_registry import ModelRegistry
+from app.hub.daemon import HubSupervisor
 from app.server import configure_fastapi_app
 
 
@@ -487,3 +489,57 @@ def test_vram_admin_endpoints_surface_registry_errors(
 
     response = client.post("/hub/models/missing/vram/unload", json={})
     assert response.status_code == HTTPStatus.BAD_REQUEST
+
+
+class FakeManager:
+    """A minimal fake manager that simulates an unloaded handler."""
+
+    async def unload(self, reason: str) -> bool:
+        """Simulate unloading the handler.
+
+        Returns False to indicate there was no loaded handler.
+        """
+        return False
+
+    def is_vram_loaded(self) -> bool:
+        """Return False to indicate VRAM is not loaded."""
+        return False
+
+
+@pytest.mark.asyncio
+async def test_stop_model_removes_manager_and_updates_registry() -> None:
+    """stop_model should clear the manager when unload() returns False.
+
+    This ensures the supervisor no longer reports the model as running and
+    that the registry is updated to reflect no attached handler.
+    """
+    hub_config = SimpleNamespace(
+        models=[
+            SimpleNamespace(
+                name="m1",
+                model_path="m1_path",
+                is_default_model=False,
+                jit_enabled=True,
+                model_type="test",
+                host="localhost",
+                port=0,
+                auto_unload_minutes=None,
+            )
+        ]
+    )
+
+    registry = ModelRegistry()
+    # Register the model id used in the hub record so update_model_state can run
+    registry.register_model("m1_path", handler=None, model_type="test")
+
+    supervisor = HubSupervisor(hub_config, registry=registry)
+    record = supervisor._models["m1"]
+    # Attach a fake manager that will return False from unload()
+    record.manager = FakeManager()
+
+    result = await supervisor.stop_model("m1")
+
+    assert result.get("status") == "stopped"
+    assert record.manager is None
+    # Registry handler should be None for the registered model id
+    assert registry.get_handler("m1_path") is None

@@ -8,7 +8,9 @@ generation, streaming, and multimodal capabilities.
 from __future__ import annotations
 
 from collections.abc import Generator
+from contextlib import redirect_stderr, redirect_stdout
 import os
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -54,11 +56,19 @@ class MLX_VLM:
             ValueError: If model loading fails.
         """
         try:
-            self.model, self.processor = load(
-                model_path,
-                lazy=False,
-                trust_remote_code=trust_remote_code,
-            )
+            # See comment in mlx_lm: disable stderr writes from progress
+            # reporting libraries during model load to avoid BrokenPipeError
+            # when stderr is closed by the runtime.
+            with (
+                Path(os.devnull).open("w") as _devnull,
+                redirect_stdout(_devnull),
+                redirect_stderr(_devnull),
+            ):
+                self.model, self.processor = load(
+                    model_path,
+                    lazy=False,
+                    trust_remote_code=trust_remote_code,
+                )
             self.max_kv_size = context_length
             self.config = self.model.config
         except Exception as e:

@@ -125,6 +125,7 @@ async def test_model_start_sets_manager_and_memory_loaded(
         mock_manager = MagicMock()
         mock_manager.ensure_loaded = AsyncMock(return_value=MagicMock())
         mock_manager.is_vram_loaded.return_value = True
+        mock_manager.jit_enabled = False  # regular_model is not JIT-enabled
         mock_lhm.return_value = mock_manager
 
         result = await supervisor.start_model("regular_model")
@@ -187,6 +188,7 @@ async def test_model_load_and_unload(hub_config_with_defaults: MLXHubConfig) -> 
     with patch("app.hub.daemon.LazyHandlerManager") as mock_lhm:
         mock_manager = MagicMock()
         mock_manager.ensure_loaded = AsyncMock(return_value=MagicMock())
+        mock_manager.jit_enabled = False  # regular_model is not JIT-enabled
         mock_lhm.return_value = mock_manager
 
         start_result = await supervisor.start_model("regular_model")

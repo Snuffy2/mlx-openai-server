@@ -905,7 +905,8 @@ def create_response_chunk(
     model: str,
     *,
     is_final: bool = False,
-    finish_reason: str | None = "stop",
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter", "function_call"]
+    | None = "stop",
     chat_id: str | None = None,
     created_time: int | None = None,
     request_id: str | None = None,
@@ -951,7 +952,7 @@ def create_response_chunk(
                 StreamingChoice(
                     index=0,
                     delta=Delta(content=chunk, role="assistant"),  # type: ignore[call-arg]
-                    finish_reason=finish_reason if is_final else None,  # type: ignore[arg-type]
+                    finish_reason=finish_reason if is_final else None,
                 ),
             ],
             request_id=request_id,
@@ -972,7 +973,7 @@ def create_response_chunk(
                         role="assistant",
                         content=chunk.get("content", None),
                     ),  # type: ignore[call-arg]
-                    finish_reason=finish_reason if is_final else None,  # type: ignore[arg-type]
+                    finish_reason=finish_reason if is_final else None,
                 ),
             ],
             request_id=request_id,
@@ -989,7 +990,7 @@ def create_response_chunk(
                 StreamingChoice(
                     index=0,
                     delta=Delta(content=chunk["content"], role="assistant"),  # type: ignore[call-arg]
-                    finish_reason=finish_reason if is_final else None,  # type: ignore[arg-type]
+                    finish_reason=finish_reason if is_final else None,
                 ),
             ],
             request_id=request_id,
@@ -1029,7 +1030,7 @@ def create_response_chunk(
         choices=[
             StreamingChoice(
                 index=0, delta=delta, finish_reason=finish_reason if is_final else None
-            ),  # type: ignore[arg-type]
+            ),
         ],
         request_id=request_id,
     )

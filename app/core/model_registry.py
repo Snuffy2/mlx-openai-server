@@ -351,6 +351,8 @@ class ModelRegistry:
             entry = self._extra.setdefault(model_id, {})
             entry["vram_loaded"] = True
             entry["vram_last_load_ts"] = int(time.time())
+            # Keep human-readable status in sync with VRAM residency
+            entry["status"] = "loaded"
             entry.pop("vram_load_error", None)
 
     async def request_vram_unload(self, model_id: str, *, timeout: float | None = None) -> None:
@@ -389,6 +391,8 @@ class ModelRegistry:
             entry = self._extra.setdefault(model_id, {})
             entry["vram_loaded"] = False
             entry["vram_last_unload_ts"] = int(time.time())
+            # Keep human-readable status in sync with VRAM residency
+            entry["status"] = "unloaded"
             entry.pop("vram_load_error", None)
 
     def handler_session(

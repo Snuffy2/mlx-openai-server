@@ -141,6 +141,16 @@
             cursor: not-allowed;
             pointer-events: none;
         }
+        #overlays {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none; /* allow clicks to pass through overlay area */
+            z-index: 99998; /* overlays must be below flash which uses 99999 */
+        }
+
         .toast {
             position: fixed;
             bottom: 24px;
@@ -153,6 +163,8 @@
             backdrop-filter: blur(12px);
             min-width: 220px;
             text-align: center;
+            z-index: 99998; /* Ensure toast is above page content */
+            pointer-events: auto; /* allow interactions on toast itself */
         }
         .toast--success { color: #7af79a; border-color: rgba(122, 247, 154, 0.4); }
         .toast--error { color: #f77a7a; border-color: rgba(247, 122, 122, 0.4); }
@@ -162,6 +174,13 @@
             font-weight: 600;
             border: 1px solid transparent;
             margin-bottom: 16px;
+            position: fixed;
+            top: 120px; /* Position below the header */
+            left: 24px;
+            right: 24px;
+            z-index: 99999; /* Much higher to ensure it sits above all content */
+            pointer-events: auto; /* allow interactions on flash itself */
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
         }
         .flash--info {
             background: rgba(122, 207, 247, 0.12);
@@ -204,9 +223,8 @@
         <p>Live snapshot of registered models, groups, and controller health.</p>
     </header>
 
-    <div id="error-banner" class="error-banner" hidden></div>
-    <div id="flash-banner" class="flash flash--info" hidden></div>
-    <div id="toast" class="toast" hidden></div>
+        <!-- Overlays are kept in a top-level container appended to body
+            to avoid being trapped inside stacking contexts of content. -->
 
     <section class="card">
         <div class="grid">
@@ -454,6 +472,11 @@
 
         function showFlash(message, tone = 'info') {
             const flash = document.getElementById('flash-banner');
+            // Ensure flash banner is appended into overlays to avoid being trapped inside other contexts
+            const overlays = document.getElementById('overlays') || document.body;
+            if (flash && flash.parentElement !== overlays) {
+                overlays.appendChild(flash);
+            }
             flash.textContent = message;
             flash.className = `flash flash--${tone}`;
             flash.hidden = false;
@@ -469,6 +492,11 @@
         let serviceListenerAttached = false;
         function showToast(message, tone = 'success') {
             const toast = document.getElementById('toast');
+            // Ensure toast is appended into overlays to avoid being trapped inside other contexts
+            const overlays2 = document.getElementById('overlays') || document.body;
+            if (toast && toast.parentElement !== overlays2) {
+                overlays2.appendChild(toast);
+            }
             toast.textContent = message;
             toast.className = `toast toast--${tone}`;
             toast.hidden = false;
@@ -481,9 +509,18 @@
         }
 
         function attachModelActionListeners() {
-            const table = document.getElementById('models-body').closest('table');
+            const tbody = document.getElementById('models-body');
+            const table = tbody ? tbody.closest('table') : null;
             if (table && !table.hasAttribute('data-model-listener-attached')) {
                 table.addEventListener('click', onModelActionClick);
+                // Attach direct listeners to model buttons as a fallback (helps if delegated events are blocked)
+                table.querySelectorAll('[data-action]').forEach(btn => {
+                    if (!btn.hasAttribute('data-model-listener-attached')) {
+                        btn.addEventListener('click', onModelActionClick);
+                        btn.setAttribute('data-model-listener-attached', 'true');
+                    }
+                });
+                console.debug('attachModelActionListeners: listeners attached');
                 table.setAttribute('data-model-listener-attached', 'true');
             }
         }
@@ -491,6 +528,14 @@
         function attachServiceActionListeners() {
             if (!serviceListenerAttached) {
                 document.addEventListener('click', onServiceActionClick);
+                // Attach direct listeners to service buttons as a fallback
+                document.querySelectorAll('[data-service-action]').forEach(btn => {
+                    if (!btn.hasAttribute('data-service-listener-attached')) {
+                        btn.addEventListener('click', onServiceActionClick);
+                        btn.setAttribute('data-service-listener-attached', 'true');
+                    }
+                });
+                console.debug('attachServiceActionListeners: listeners attached');
                 serviceListenerAttached = true;
             }
         }
@@ -498,7 +543,13 @@
         async function onModelActionClick(event) {
             const button = event.target.closest('[data-action]');
             if (!button) return;
-
+            // Diagnostic feedback for debugging clicks in the browser
+            try {
+                console.debug('Model action clicked:', button.getAttribute('data-action'), 'model:', button.getAttribute('data-model'));
+            } catch (e) {
+                // ignore
+            }
+            try { showToast(`${(button.getAttribute('data-action') || '').replace(/-model$/, '')}…`, 'info'); } catch (e) { /* ignore */ }
             const model = button.getAttribute('data-model');
             const action = button.getAttribute('data-action');
             const normalizedAction = action ? action.replace(/-model$/, '') : action;
@@ -523,12 +574,15 @@
 
             try {
                 const endpoint = `/hub/models/${encodeURIComponent(model)}/${normalizedAction}`;
+                console.debug('fetching model endpoint', endpoint, 'body', { reason: 'dashboard' });
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reason: 'dashboard' }),
                 });
+                console.debug('model action fetch completed, status:', response.status);
                 const payload = await response.json().catch(() => ({}));
+                console.debug('model action payload:', payload);
                 if (!response.ok) {
                     const friendlyAction = action.replace(/-/g, ' ');
                     const message = payload?.error?.message ?? payload?.message ?? `Failed to ${friendlyAction} ${model}`;
@@ -543,6 +597,7 @@
                 }[normalizedAction] ?? 'Action';
                 showToast(`${verb} ${scopeLabel} request sent for ${model}`, 'success');
             } catch (error) {
+                console.error('model action error', error);
                 showToast(error.message ?? 'Action failed', 'error');
             } finally {
                 rowButtons.forEach((btn) => {
@@ -572,6 +627,9 @@
             const originalLabel = button.textContent;
             button.disabled = true;
             button.textContent = `${action.charAt(0).toUpperCase() + action.slice(1)}…`;
+            // Provide immediate debug feedback so users can see the click was registered
+            console.debug('Service action clicked:', action);
+            try { showToast(`${action.charAt(0).toUpperCase() + action.slice(1)} request…`, 'info'); } catch (e) { /* ignore */ }
             clearFlash();
 
             try {
@@ -634,5 +692,11 @@
         fetchSnapshot();
         setInterval(fetchSnapshot, REFRESH_INTERVAL_MS);
     </script>
-</body>
+        <!-- Overlays are kept at the end of body to ensure they are direct children of <body> -->
+        <div id="overlays">
+            <div id="error-banner" class="error-banner" hidden></div>
+            <div id="flash-banner" class="flash flash--info" hidden></div>
+            <div id="toast" class="toast" hidden></div>
+        </div>
+    </body>
 </html>

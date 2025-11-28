@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -27,13 +27,15 @@ from ..const import (
     DEFAULT_API_HOST,
     DEFAULT_AUTO_UNLOAD_MINUTES,
     DEFAULT_GROUP,
+    DEFAULT_HUB_LOG_PATH,
     DEFAULT_IS_DEFAULT_MODEL,
     DEFAULT_JIT_ENABLED,
+    DEFAULT_LOG_LEVEL,
     DEFAULT_MODEL_TYPE,
     DEFAULT_PORT,
 )
 from ..core.model_registry import ModelRegistry
-from ..server import LazyHandlerManager, MLXHandler, configure_fastapi_app
+from ..server import LazyHandlerManager, MLXHandler, configure_fastapi_app, configure_logging
 from ..utils.network import is_port_available
 from .config import MLXHubConfig, load_hub_config
 
@@ -113,31 +115,69 @@ class HubSupervisor:
             original_model_path = record.model_path
 
             if not record.manager:
-                # Create the manager
-                cfg = MLXServerConfig(
-                    model_path=str(
-                        getattr(record.config, "model_path", None)
-                        or getattr(record.config, "model", None)
-                        or "",
-                    ),
-                    model_type=getattr(record.config, "model_type", None) or DEFAULT_MODEL_TYPE,
-                    host=getattr(record.config, "host", DEFAULT_API_HOST),
-                    port=getattr(record.config, "port", None) or 0,
-                    jit_enabled=bool(getattr(record.config, "jit_enabled", DEFAULT_JIT_ENABLED)),
-                    auto_unload_minutes=getattr(
-                        record.config,
-                        "auto_unload_minutes",
-                        DEFAULT_AUTO_UNLOAD_MINUTES,
-                    ),
-                    name=getattr(record.config, "name", None)
-                    or getattr(record.config, "model_name", None),
-                )
+                # Create the manager. Prefer using the parsed MLXServerConfig
+                # from the hub config (record.config) so fields like `log_file`
+                # and `log_level` are preserved. If record.config is not already
+                # an MLXServerConfig, build one and inherit hub defaults.
+                if isinstance(record.config, MLXServerConfig):
+                    cfg = record.config
+                else:
+                    cfg = MLXServerConfig(
+                        model_path=str(
+                            getattr(record.config, "model_path", None)
+                            or getattr(record.config, "model", None)
+                            or "",
+                        ),
+                        model_type=getattr(record.config, "model_type", None) or DEFAULT_MODEL_TYPE,
+                        host=getattr(record.config, "host", DEFAULT_API_HOST),
+                        port=getattr(record.config, "port", None) or 0,
+                        jit_enabled=bool(
+                            getattr(record.config, "jit_enabled", DEFAULT_JIT_ENABLED)
+                        ),
+                        auto_unload_minutes=getattr(
+                            record.config,
+                            "auto_unload_minutes",
+                            DEFAULT_AUTO_UNLOAD_MINUTES,
+                        ),
+                        name=getattr(record.config, "name", None)
+                        or getattr(record.config, "model_name", None),
+                    )
+
+                # Ensure model log level falls back to hub log level when unspecified
+                if not getattr(cfg, "log_level", None):
+                    cfg.log_level = getattr(self.hub_config, "log_level", DEFAULT_LOG_LEVEL)
+
+                # Resolve default per-model log file when not explicitly set and
+                # file logging is enabled. Use hub log path to derive the filename.
+                if not getattr(cfg, "no_log_file", False) and not getattr(cfg, "log_file", None):
+                    model_name = getattr(cfg, "name", None)
+                    if model_name and getattr(self.hub_config, "log_path", None):
+                        try:
+                            cfg.log_file = str(Path(self.hub_config.log_path) / f"{model_name}.log")
+                        except Exception:
+                            cfg.log_file = None
+
                 record.manager = LazyHandlerManager(cfg)
                 # Only overwrite record.model_path if cfg.model_path is truthy and matches the registered id
-                if cfg.model_path and cfg.model_path == original_model_path:
+                if getattr(cfg, "model_path", None) and cfg.model_path == original_model_path:
                     record.model_path = cfg.model_path
 
-            await record.manager.ensure_loaded("start")
+            # Only load immediately if JIT is disabled
+            if not record.manager.jit_enabled:
+                await record.manager.ensure_loaded("start")
+                if self.registry:
+                    # Use the guaranteed registered model_id (original_model_path) for update_model_state
+                    model_id_for_registry = (
+                        original_model_path if original_model_path else record.model_path
+                    )
+                    assert model_id_for_registry is not None
+                    await self.registry.update_model_state(
+                        model_id_for_registry, handler=record.manager
+                    )
+                logger.info(f"Loaded model {name}")
+                return {"status": "loaded", "name": name}
+
+            # JIT enabled: just create the manager, don't load yet
             if self.registry:
                 # Use the guaranteed registered model_id (original_model_path) for update_model_state
                 model_id_for_registry = (
@@ -147,8 +187,8 @@ class HubSupervisor:
                 await self.registry.update_model_state(
                     model_id_for_registry, handler=record.manager
                 )
-            logger.info(f"Loaded model {name}")
-            return {"status": "loaded", "name": name}
+            logger.info(f"Started model {name} (JIT enabled, not loaded)")
+            return {"status": "started", "name": name}
 
     async def stop_model(self, name: str) -> dict[str, Any]:
         """Stop a supervised model process.
@@ -178,6 +218,12 @@ class HubSupervisor:
             unloaded = await record.manager.unload("stop")
             if unloaded:
                 logger.info(f"Unloaded model {name}")
+                # Remove per-model log sink if present
+                try:
+                    if hasattr(record.manager, "remove_log_sink"):
+                        record.manager.remove_log_sink()
+                except Exception:
+                    logger.debug(f"Failed to remove log sink for {name}")
                 record.manager = None  # Clear the manager so the model is fully stopped
                 # Update registry to reflect the stopped state
                 if self.registry and record.model_path is not None:
@@ -186,7 +232,25 @@ class HubSupervisor:
                     except Exception as e:
                         logger.warning(f"Failed to update registry for stopped model {name}: {e}")
                 return {"status": "stopped", "name": name}
-            return {"status": "not_running", "name": name}
+
+            # If unload returned False it usually means the manager existed but
+            # there was no loaded handler (JIT manager with no active process).
+            # Treat a stop request as removing the manager in this case so the
+            # supervisor and UI reflect the not-running state.
+            logger.info(f"Removing manager for {name} (no handler loaded)")
+            try:
+                # Remove per-model log sink if present
+                try:
+                    if hasattr(record.manager, "remove_log_sink"):
+                        record.manager.remove_log_sink()
+                except Exception:
+                    logger.debug(f"Failed to remove log sink for {name}")
+                record.manager = None
+                if self.registry and record.model_path is not None:
+                    await self.registry.update_model_state(record.model_path, handler=None)
+            except Exception as e:
+                logger.warning(f"Failed to update registry while removing manager for {name}: {e}")
+            return {"status": "stopped", "name": name}
 
     async def get_handler(self, name: str, reason: str = "request") -> MLXHandler | None:
         """Get the current handler for a model, loading it if necessary.
@@ -230,6 +294,14 @@ class HubSupervisor:
             handler = await record.manager.ensure_loaded("load")
             if handler:
                 logger.info(f"Loaded model {name} handler")
+                # Update registry to reflect the loaded state
+                if self.registry and record.model_path is not None:
+                    try:
+                        await self.registry.update_model_state(
+                            record.model_path, handler=record.manager
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to update registry for loaded model {name}: {e}")
                 return {"status": "loaded", "name": name}
             raise HTTPException(
                 status_code=400,
@@ -250,7 +322,21 @@ class HubSupervisor:
             unloaded = await record.manager.unload("unload")
             if unloaded:
                 logger.info(f"Unloaded model {name} handler")
+                # Remove per-model log sink if present
+                try:
+                    if hasattr(record.manager, "remove_log_sink"):
+                        record.manager.remove_log_sink()
+                except Exception:
+                    logger.debug(f"Failed to remove log sink for {name}")
+                # Clear manager and update registry to reflect unloaded state
+                record.manager = None
+                if self.registry and record.model_path is not None:
+                    try:
+                        await self.registry.update_model_state(record.model_path, handler=None)
+                    except Exception as e:
+                        logger.warning(f"Failed to update registry for unloaded model {name}: {e}")
                 return {"status": "unloaded", "name": name}
+
             return {"status": "not_loaded", "name": name}
 
     async def reload_config(self) -> dict[str, Any]:
@@ -479,6 +565,28 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         hub_config_path = os.environ.get("MLX_HUB_CONFIG_PATH")
 
     hub_config = load_hub_config(hub_config_path)
+
+    # Ensure hub log path exists and configure logging for hub-level logs
+    # Prefer the configured hub log path; fall back to DEFAULT_HUB_LOG_PATH
+    try:
+        hub_log_path = Path(getattr(hub_config, "log_path", DEFAULT_HUB_LOG_PATH))
+    except Exception:
+        hub_log_path = Path(DEFAULT_HUB_LOG_PATH)
+    # Expand user (~) if present
+    try:
+        hub_log_path = hub_log_path.expanduser()
+    except Exception:
+        hub_log_path = Path.cwd() / "logs"
+    with suppress(Exception):
+        hub_log_path.mkdir(parents=True, exist_ok=True)
+    try:
+        configure_logging(
+            log_file=str(hub_log_path / "app.log"),
+            no_log_file=False,
+            log_level=getattr(hub_config, "log_level", "INFO"),
+        )
+    except Exception:
+        logger.warning("Failed to configure hub logging; continuing with defaults")
 
     # Create and populate model registry
     registry = ModelRegistry()

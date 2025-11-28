@@ -212,6 +212,14 @@ def _build_models(
         Base host for models.
     base_port : int
         Base port for models.
+    starting_port : int
+        The first port number to try/assign when auto-allocating model server
+        ports. Must be a positive integer (typically >= 1024 and <= 65535)
+        and should not collide with reserved ports (for example the hub
+        controller `base_port` or any entries in ``additional_reserved_ports``).
+        When ``persisted_ports`` is provided, previously assigned ports are
+        preferred and ``starting_port`` only influences allocation for models
+        without a persisted assignment.
     base_log_level : str
         Base log level for models.
     hub_log_path : Path

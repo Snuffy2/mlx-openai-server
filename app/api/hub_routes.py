@@ -331,9 +331,13 @@ def _service_error_response(action: str, exc: HubServiceError) -> JSONResponse:
     error_type = (
         "rate_limit_error" if status == HTTPStatus.TOO_MANY_REQUESTS else "service_unavailable"
     )
+    # Log the full exception for diagnostics but avoid exposing low-level
+    # transport errors (e.g. BrokenPipeError) directly to the UI.
+    logger.debug(f"Hub service error while attempting {action}: {exc}")
+    friendly_message = f"Failed to {action} via hub manager. See server logs for details."
     return JSONResponse(
         content=create_error_response(
-            f"Failed to {action} via hub manager: {exc}",
+            friendly_message,
             error_type,
             status,
         ),
@@ -419,8 +423,29 @@ def _controller_error_response(exc: Exception) -> JSONResponse:
         error_type = "rate_limit_error"
     elif status >= HTTPStatus.INTERNAL_SERVER_ERROR:
         error_type = "service_unavailable"
+    # If the controller raised an HTTPException (or similar) include the
+    # detail in the response so clients/tests can observe controller-level
+    # status and messages. For other exceptions we keep a friendly message
+    # and log the full details to server logs to avoid leaking low-level IO
+    # errors to the UI.
+    logger.debug(f"Controller error converted to response: {exc}")
+    if isinstance(exc, HTTPException):
+        # fastapi.HTTPException uses .detail for human-friendly info
+        detail = exc.detail
+        try:
+            message = f"{exc.status_code}: {detail}"
+        except Exception:
+            message = str(detail)
+        return JSONResponse(
+            content=create_error_response(message, error_type, status),
+            status_code=status,
+        )
+
+    friendly_message = (
+        "Controller failed to execute the requested action. See server logs for details."
+    )
     return JSONResponse(
-        content=create_error_response(str(exc), error_type, status),
+        content=create_error_response(friendly_message, error_type, status),
         status_code=status,
     )
 
@@ -1046,7 +1071,6 @@ async def hub_stop_model(
 async def hub_load_model(
     model_name: str,
     raw_request: Request,
-    payload: HubModelActionRequest | None = None,
 ) -> HubModelActionResponse | JSONResponse:
     """Request that the in-process controller load ``model_name`` into memory.
 
@@ -1056,22 +1080,19 @@ async def hub_load_model(
         The name of the model to load.
     raw_request : Request
         The incoming FastAPI request.
-    payload : HubModelActionRequest, optional
-        Additional payload for the request.
 
     Returns
     -------
     HubModelActionResponse or JSONResponse
         Response indicating the result of the load action.
     """
-    return await _hub_memory_controller_action(raw_request, model_name, "load", payload)
+    return await _hub_memory_controller_action(raw_request, model_name, "load")
 
 
 @hub_router.post("/hub/models/{model_name}/unload", response_model=HubModelActionResponse)
 async def hub_unload_model(
     model_name: str,
     raw_request: Request,
-    payload: HubModelActionRequest | None = None,
 ) -> HubModelActionResponse | JSONResponse:
     """Request that the in-process controller unload ``model_name`` from memory.
 
@@ -1081,15 +1102,13 @@ async def hub_unload_model(
         The name of the model to unload.
     raw_request : Request
         The incoming FastAPI request.
-    payload : HubModelActionRequest, optional
-        Additional payload for the request.
 
     Returns
     -------
     HubModelActionResponse or JSONResponse
         Response indicating the result of the unload action.
     """
-    return await _hub_memory_controller_action(raw_request, model_name, "unload", payload)
+    return await _hub_memory_controller_action(raw_request, model_name, "unload")
 
 
 @hub_router.post("/hub/models/{model_name}/vram/load", response_model=HubModelActionResponse)
@@ -1285,7 +1304,6 @@ async def _hub_memory_controller_action(
     raw_request: Request,
     model_name: str,
     action: Literal["load", "unload"],
-    payload: HubModelActionRequest | None,
 ) -> HubModelActionResponse | JSONResponse:
     """Execute a memory load/unload request using the in-process controller.
 
@@ -1297,8 +1315,6 @@ async def _hub_memory_controller_action(
         The name of the model to act on.
     action : Literal["load", "unload"]
         The action to perform.
-    payload : HubModelActionRequest or None
-        Additional payload for the request.
 
     Returns
     -------
@@ -1322,11 +1338,45 @@ async def _hub_memory_controller_action(
 
     try:
         if action == "load":
-            await controller.load_model(target)
-            message = f"Model '{target}' memory load requested"
+            # Shield the long-running load so cancellation of the request
+            # (for example due to a client disconnect) doesn't cancel the
+            # underlying model initialization. If the await is cancelled
+            # we schedule the operation in the background and return a
+            # "requested" response to the client.
+            coro = controller.load_model(target)
+            try:
+                await asyncio.shield(coro)
+                message = f"Model '{target}' memory load requested"
+            except asyncio.CancelledError:
+                # Request task was cancelled (client disconnected). Ensure
+                # the load continues in background and return a requested
+                # response.
+                asyncio.create_task(coro)
+                message = f"Model '{target}' memory load requested (running in background)"
         else:
-            await controller.unload_model(target)
-            message = f"Model '{target}' memory unload requested"
+            coro = controller.unload_model(target)
+            try:
+                await asyncio.shield(coro)
+                message = f"Model '{target}' memory unload requested"
+            except asyncio.CancelledError:
+                asyncio.create_task(coro)
+                message = f"Model '{target}' memory unload requested (running in background)"
+    except BrokenPipeError as e:  # pragma: no cover - defensive handling
+        # Broken pipe can surface from low-level I/O during heavy init; log
+        # and schedule the operation in background to avoid exposing raw
+        # socket errors to the UI while still performing the work.
+        logger.exception(
+            f"Broken pipe while executing {action} for {target}: {e}",
+        )
+        try:
+            asyncio.create_task(
+                controller.load_model(target)
+                if action == "load"
+                else controller.unload_model(target)
+            )
+        except Exception:
+            logger.debug("Failed to schedule background model action after BrokenPipeError")
+        message = f"Model '{target}' memory {action} requested (running in background)"
     except Exception as e:  # pragma: no cover - defensive logging
         logger.exception(
             f"Unexpected failure while executing {action} for {target}. {type(e).__name__}: {e}",

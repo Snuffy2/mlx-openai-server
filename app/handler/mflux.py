@@ -179,7 +179,7 @@ class MLXFluxHandler:
                 f"Error in image generation for request {request_id}. {type(e).__name__}: {e}",
             )
             content = create_error_response(
-                f"Failed to generate image: {e}",
+                "Failed to generate image",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
@@ -328,7 +328,7 @@ class MLXFluxHandler:
                 f"Unexpected error in image edit for request {request_id}. {type(e).__name__}: {e}",
             )
             content = create_error_response(
-                f"Failed to edit image: {e}",
+                "Failed to edit image",
                 "server_error",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
