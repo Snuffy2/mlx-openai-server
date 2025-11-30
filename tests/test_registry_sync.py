@@ -23,7 +23,7 @@ class StubManager:
     def __init__(self) -> None:
         """
         Initialize the StubManager.
-        
+
         Sets the internal loaded flag to False indicating no model is currently loaded.
         """
         self._loaded = False
@@ -31,7 +31,7 @@ class StubManager:
     def is_vram_loaded(self) -> bool:
         """
         Indicates whether the stub manager is currently loaded.
-        
+
         Returns:
             bool: True if the stub is loaded, False otherwise.
         """
@@ -40,7 +40,7 @@ class StubManager:
     async def ensure_loaded(self, _reason: str = "test") -> object:
         """
         Mark this stub as loaded and provide a dummy handler object.
-        
+
         Returns:
             object: A new dummy handler object representing the loaded handler.
         """
@@ -50,10 +50,10 @@ class StubManager:
     async def unload(self, _reason: str = "test") -> bool:
         """
         Unload the manager if it is currently loaded.
-        
+
         Parameters:
             _reason (str): Optional reason for unloading; ignored by this stub.
-        
+
         Returns:
             bool: `True` if the manager was loaded and was unloaded, `False` otherwise.
         """
@@ -65,7 +65,7 @@ class StubManager:
     def remove_log_sink(self) -> None:
         """
         Placeholder that does nothing when asked to remove per-model log sinks.
-        
+
         Present to satisfy the manager protocol; has no effect.
         """
         # Explicitly returning None is unnecessary.

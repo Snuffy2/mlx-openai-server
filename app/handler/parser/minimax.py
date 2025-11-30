@@ -33,7 +33,7 @@ class MinimaxToolParser(BaseToolParser):
     def __init__(self) -> None:
         """
         Initialize the parser with MiniMax tool markers and compile regex patterns used to extract tool-call details.
-        
+
         Sets:
         - `func_detail_regex`: matches an `<invoke name="...">` block and captures the function name and the rest of the content.
         - `func_arg_regex`: matches `<parameter name="...">value</parameter>` entries and captures parameter names and their string values.
@@ -49,12 +49,12 @@ class MinimaxToolParser(BaseToolParser):
     def _deserialize_value(self, value: str) -> Any:
         """
         Convert a string representation into the corresponding Python value.
-        
+
         Attempts to parse the stripped input as JSON, then as a Python literal; if both parse attempts fail, returns the stripped original string.
-        
+
         Parameters:
             value (str): The input string to deserialize; leading and trailing whitespace will be removed.
-        
+
         Returns:
             Any: The deserialized Python object (e.g., dict, list, int, float, bool), or the stripped original string if parsing fails.
         """
@@ -78,10 +78,10 @@ class MinimaxToolParser(BaseToolParser):
     def _parse_tool_content(self, tool_content: str) -> dict[str, Any] | None:
         """
         Parse a MiniMax-formatted tool call string into a dictionary with the function name and its arguments.
-        
+
         Parameters:
             tool_content (str): The raw MiniMax tool call content to parse.
-        
+
         Returns:
             dict[str, Any] | None: A dictionary with keys:
                 - "name": the parsed function name (str).

@@ -138,11 +138,11 @@ class ParserFactory:
     ) -> BaseThinkingParser | BaseToolParser | HarmonyParser | None:
         """
         Instantiate a parser registered under the given name and type.
-        
+
         Parameters:
             parser_name (str): Registered parser name (e.g., "qwen3", "glm4_moe", "harmony").
             parser_type (str): Requested parser type: "thinking", "tool", or "unified".
-        
+
         Returns:
             BaseThinkingParser | BaseToolParser | HarmonyParser | None: The created parser instance, or `None` if the parser name is unknown or the requested type is not available.
         """
@@ -175,14 +175,14 @@ class ParserFactory:
     ]:
         """
         Create thinking and tool parsers according to explicit manual configuration.
-        
+
         If either manual parser name is "harmony", a unified Harmony parser will be created and returned as the thinking/parser tuple (harmony_parser, None). Parsers are only instantiated when their names are provided; unspecified or failed creations yield `None` for that slot.
-        
+
         Parameters:
             model_type (str): Model type used for logging or diagnostic messages.
             manual_reasoning_parser (str | None): Name of the reasoning parser to instantiate, or None to skip.
             manual_tool_parser (str | None): Name of the tool parser to instantiate, or None to skip.
-        
+
         Returns:
             tuple:
                 thinking_parser: The instantiated thinking/unified parser or `None`.
@@ -225,10 +225,10 @@ class ParserFactory:
     def create_converter(model_type: str, **kwargs: Any) -> BaseMessageConverter | None:
         """
         Return the message converter for the given model type or None if no converter is registered.
-        
+
         Parameters:
             model_type (str): Model identifier (e.g., "glm4_moe", "minimax").
-        
+
         Returns:
             BaseMessageConverter | None: An instance of the registered message converter for the model type, or `None` if no converter is registered.
         """

@@ -33,7 +33,7 @@ class Glm4MoEToolParser(BaseToolParser):
     def __init__(self) -> None:
         """
         Initialize the GLM4 MoE tool parser with GLM4-specific tool markers and compiled regex patterns.
-        
+
         Sets the tool open/close markers to GLM4 values and prepares two regex patterns:
         - `func_detail_regex`: matches a function detail block (function name on the first line and the remaining block of arguments).
         - `func_arg_regex`: matches individual argument entries expressed as `<arg_key>...</arg_key><arg_value>...</arg_value>` pairs.
@@ -49,10 +49,10 @@ class Glm4MoEToolParser(BaseToolParser):
     def _deserialize_value(self, value: str) -> Any:
         """
         Deserialize a string into the most appropriate Python value.
-        
+
         Parameters:
             value (str): A string containing a serialized value (JSON, Python literal, or plain text).
-        
+
         Returns:
             The deserialized Python object parsed from `value` (e.g., dict, list, int, float, bool), or the original stripped string if parsing fails.
         """
@@ -76,12 +76,12 @@ class Glm4MoEToolParser(BaseToolParser):
     def _parse_tool_content(self, tool_content: str) -> dict[str, Any] | None:
         """
         Parse a GLM4-style tool call string into a tool descriptor with name and arguments.
-        
+
         Parses `tool_content` for a function name and a sequence of key/value argument pairs in the GLM4 MoE tool-call format. On successful parse returns a dictionary with the function `name` and an `arguments` mapping; if the content does not match the expected format or a parsing error occurs, returns `None`.
-        
+
         Parameters:
             tool_content (str): Raw tool-call text produced by the GLM4 model.
-        
+
         Returns:
             dict: A dictionary with keys:
                 - "name" (str): The parsed function name.

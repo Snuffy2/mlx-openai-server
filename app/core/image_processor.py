@@ -72,13 +72,13 @@ class ImageProcessor(BaseProcessor):
     ) -> Image.Image:
         """
         Resize an image so its larger dimension does not exceed max_size while preserving aspect ratio.
-        
+
         If both width and height are already less than or equal to max_size, the original image is returned unchanged.
-        
+
         Parameters:
             image (PIL.Image.Image): Source image to resize.
             max_size (int): Maximum allowed size (pixels) for the image's larger dimension.
-        
+
         Returns:
             PIL.Image.Image: The resized image, or the original image if no resizing was needed.
         """
@@ -112,12 +112,12 @@ class ImageProcessor(BaseProcessor):
     def _process_media_data(self, data: bytes, cached_path: str, **kwargs: Any) -> str:
         """
         Process raw image bytes, optionally resize, prepare for saving as an RGB PNG, write the file to the given cache path, and trigger cache cleanup.
-        
+
         Parameters:
             data (bytes): Raw image file bytes to process.
             cached_path (str): Filesystem path where the processed PNG will be written.
             resize (bool, optional): If True (default), resize the image to fit the configured maximum while preserving aspect ratio. Provided via kwargs.
-        
+
         Returns:
             str: The path to the saved cached image.
         """
@@ -141,10 +141,10 @@ class ImageProcessor(BaseProcessor):
     async def process_image_url(self, image_url: str, *, resize: bool = True) -> str:
         """
         Process an image URL, cache the resulting PNG file, and return the cached file path.
-        
+
         Parameters:
             resize (bool): If True, the image will be resized to fit within the processor's maximum size before saving.
-        
+
         Returns:
             cached_path (str): Filesystem path to the saved cached image.
         """
@@ -158,11 +158,11 @@ class ImageProcessor(BaseProcessor):
     ) -> list[str | BaseException]:
         """
         Process a batch of image URLs and cache each image locally.
-        
+
         Parameters:
             image_urls (list[str]): Iterable of image URLs to process.
             resize (bool): When True, resize each image according to the processor's resizing policy.
-        
+
         Returns:
             list[str | BaseException]: A list where each element is the path to the cached file for a successfully processed URL, or a `BaseException` instance for a URL that failed.
         """

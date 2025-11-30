@@ -55,10 +55,10 @@ def is_port_available(host: str | None = None, port: int | None = None) -> bool:
 def _is_ipv6_host(host: str) -> bool:
     """
     Determine whether the provided host string denotes an IPv6 address. Surrounding whitespace and enclosing brackets (`[...]`) are ignored.
-    
+
     Parameters:
         host (str): Host string to inspect; may be an IPv6 literal with or without surrounding brackets.
-    
+
     Returns:
         `True` if the host is an IPv6 address, `False` otherwise.
     """
@@ -75,14 +75,14 @@ def _is_ipv6_host(host: str) -> bool:
 def _normalize_host_for_binding(host: str, family: int) -> str:
     """
     Return a host string normalized for use as a socket bind address.
-    
+
     This normalizes whitespace, unwraps IPv6 literals enclosed in square brackets when binding to IPv6,
     and maps empty or unspecified hosts to appropriate bind addresses for the requested address family.
-    
+
     Parameters:
         host (str): The original host string (may contain surrounding whitespace or IPv6 brackets).
         family (int): Address family (e.g., socket.AF_INET or socket.AF_INET6) determining IPv4 vs IPv6 behavior.
-    
+
     Returns:
         str: A host string suitable for binding:
             - For IPv6 family: the unwrapped IPv6 address if bracketed, the original non-empty value otherwise,

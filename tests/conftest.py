@@ -24,17 +24,17 @@ from app.server import LazyHandlerManager
 def make_hub_config(tmp_path: Path) -> Callable[..., MLXHubConfig]:
     """
     Create a factory that builds MLXHubConfig instances with overridable fields.
-    
+
     The returned callable accepts keyword overrides for the following fields:
     `host`, `port`, `model_starting_port`, `log_level`, `log_path`, `enable_status_page`,
     `source_path`, and `models`. If an override is not provided, these defaults are used:
     host='127.0.0.1', port=8123, model_starting_port=8000, log_level='INFO',
     log_path=tmp_path / 'logs', enable_status_page=True, source_path=tmp_path / 'hub.yaml'.
     If `models` is not provided, the default is a single LM model at `/models/foo` named "foo".
-    
+
     Parameters:
         tmp_path (Path): Base temporary directory used to construct default `log_path` and `source_path`.
-    
+
     Returns:
         Callable[..., MLXHubConfig]: A callable that accepts keyword overrides and returns an MLXHubConfig.
     """
@@ -42,7 +42,7 @@ def make_hub_config(tmp_path: Path) -> Callable[..., MLXHubConfig]:
     def _factory(**overrides: object) -> MLXHubConfig:
         """
         Builds an MLXHubConfig with sensible defaults and optional overrides for common fields.
-        
+
         Accepted override keys and defaults:
         - host: "127.0.0.1"
         - port: 8123
@@ -52,7 +52,7 @@ def make_hub_config(tmp_path: Path) -> Callable[..., MLXHubConfig]:
         - enable_status_page: True
         - source_path: tmp_path / "hub.yaml"
         - models: list of model configs (default is a single LM model at "/models/foo" named "foo")
-        
+
         Returns:
             MLXHubConfig: A hub configuration populated with the provided overrides and models.
         """
@@ -81,9 +81,9 @@ def hub_config_with_defaults(
 ) -> MLXHubConfig:
     """
     Create an MLXHubConfig containing a default model and a regular model for lifecycle tests.
-    
+
     Both models are created using the provided make_model_mock factory to keep test model mocks consistent.
-    
+
     Returns:
         MLXHubConfig: Hub configuration containing the two mock models (a default model and a regular model).
     """
@@ -112,12 +112,12 @@ def hub_config_with_defaults(
 def mock_handler_manager() -> MagicMock:
     """
     Create a MagicMock that simulates a LazyHandlerManager for tests.
-    
+
     The mock is preconfigured with observable behaviour commonly used in tests:
     - is_vram_loaded() returns False
     - ensure_loaded is an AsyncMock
     - unload is an AsyncMock that returns True
-    
+
     Returns:
         MagicMock: A mock object shaped like `LazyHandlerManager` with the above behaviours.
     """
@@ -132,7 +132,7 @@ def mock_handler_manager() -> MagicMock:
 def hub_config_file(tmp_path: Path) -> Path:
     """
     Write a minimal hub.yaml used by CLI tests containing a log_path and a single model named "alpha".
-    
+
     Returns:
         Path: Path to the written hub.yaml file.
     """
@@ -154,22 +154,22 @@ models:
 def make_config(tmp_path: Path) -> Callable[[], MLXHubConfig]:
     """
     Create a zero-argument factory that builds a simple MLXHubConfig for tests.
-    
+
     The returned callable captures the provided tmp_path and, when invoked,
     produces an MLXHubConfig whose log_path is tmp_path / "logs" and which
     contains a single LM model named "foo" with model_path "/models/foo".
-    
+
     Parameters:
-    	tmp_path (Path): Temporary directory used as the base for the config's log_path.
-    
+        tmp_path (Path): Temporary directory used as the base for the config's log_path.
+
     Returns:
-    	factory (Callable[[], MLXHubConfig]): A callable that returns the described MLXHubConfig.
+        factory (Callable[[], MLXHubConfig]): A callable that returns the described MLXHubConfig.
     """
 
     def _make_config() -> MLXHubConfig:
         """
         Create a minimal MLXHubConfig for tests with a single LM model.
-        
+
         Returns:
             config (MLXHubConfig): Configuration with `log_path` set to the test temporary path's "logs"
             directory and `models` containing one MLXServerConfig for model "foo" (model_type "lm",
@@ -187,9 +187,9 @@ def make_config(tmp_path: Path) -> Callable[[], MLXHubConfig]:
 def live_snapshot() -> Callable[[int], dict]:
     """
     Create a generator function that produces a live snapshot payload for tests.
-    
+
     The returned callable accepts a single argument `pid` (default 4321) and returns a dictionary representing a hub snapshot. The snapshot contains a "models" list with one model having keys: "name", "state", "pid", "log_path", and "started_at".
-    
+
     Returns:
         fn (Callable[[int], dict]): A function that when called with `pid` returns the snapshot dictionary.
     """
@@ -197,10 +197,10 @@ def live_snapshot() -> Callable[[int], dict]:
     def _live_snapshot(pid: int = 4321) -> dict:
         """
         Create a minimal live snapshot payload containing a single running model.
-        
+
         Parameters:
             pid (int): Process ID to include for the model snapshot.
-        
+
         Returns:
             dict: Snapshot with a "models" list containing one model object with keys:
                 - "name": model name
@@ -228,10 +228,10 @@ def live_snapshot() -> Callable[[int], dict]:
 def write_hub_yaml(tmp_path: Path) -> Callable[[str, str], Path]:
     """
     Create a writer function that writes given YAML content into a file under the provided temporary path.
-    
+
     Parameters:
         tmp_path (Path): Directory used as the base path for created files.
-    
+
     Returns:
         Callable[[str, str], Path]: A function that accepts (content, filename) — writes `content` (trimmed) to `tmp_path/filename` and returns the file Path.
     """
@@ -239,11 +239,11 @@ def write_hub_yaml(tmp_path: Path) -> Callable[[str, str], Path]:
     def _write(content: str, filename: str = "hub.yaml") -> Path:
         """
         Write provided text to a file located in the module's temporary test path.
-        
+
         Parameters:
             content (str): Text to write to the file; leading and trailing whitespace will be stripped.
             filename (str): Name of the file to create under the temporary path (default "hub.yaml").
-        
+
         Returns:
             Path: Path object pointing to the created file.
         """
@@ -258,9 +258,10 @@ def write_hub_yaml(tmp_path: Path) -> Callable[[str, str], Path]:
 def make_model_mock() -> Callable[..., MagicMock]:
     """
     Create a factory that produces configurable MagicMock objects representing a model.
-    
+
     The returned callable has signature
     `(name: str = "mock_model", model_path: str = "/models/mock", model_type: str = "lm", *, is_default: bool = False, group: str | None = None, auto_unload_minutes: int | None = None) -> MagicMock`.
+
     Parameters:
         name (str): Model name.
         model_path (str): Filesystem path or identifier for the model.
@@ -268,7 +269,7 @@ def make_model_mock() -> Callable[..., MagicMock]:
         is_default (bool): Whether the model should be marked as the default model.
         group (str | None): Optional model group name.
         auto_unload_minutes (int | None): Optional automatic unload timeout in minutes.
-    
+
     Returns:
         MagicMock: A mock object with attributes `name`, `model_path`, `model_type`, `is_default_model`, `group`, and `auto_unload_minutes` set from the factory arguments.
     """
@@ -284,7 +285,7 @@ def make_model_mock() -> Callable[..., MagicMock]:
     ) -> MagicMock:
         """
         Create a MagicMock that simulates a model object with common model attributes.
-        
+
         Parameters:
             name (str): Model name.
             model_path (str): Filesystem or repository path for the model.
@@ -292,7 +293,7 @@ def make_model_mock() -> Callable[..., MagicMock]:
             is_default (bool): Whether this model is marked as the default model.
             group (str | None): Optional group identifier the model belongs to.
             auto_unload_minutes (int | None): Optional auto-unload timeout in minutes.
-        
+
         Returns:
             MagicMock: A mock object with attributes `name`, `model_path`, `model_type`, `is_default_model`, `group`, and `auto_unload_minutes` set to the provided values.
         """
@@ -314,7 +315,7 @@ class _StubServiceState:
     def __init__(self) -> None:
         """
         Initialize a fresh stub service state used by tests.
-        
+
         Attributes:
             available (bool): Whether the service is considered available.
             reload_calls (int): Number of times reload was invoked.
@@ -341,7 +342,7 @@ class _StubController:
     def __init__(self) -> None:
         """
         Initialize the stub controller's tracking state for model operations.
-        
+
         Attributes:
             loaded (list[str]): Names of models that have been loaded.
             unloaded (list[str]): Names of models that have been unloaded.
@@ -358,10 +359,10 @@ class _StubController:
     async def load_model(self, name: str) -> None:
         """
         Record that a model was loaded for the stub controller and simulate a quota error for a denied model.
-        
+
         Parameters:
             name (str): The model name to mark as loaded.
-        
+
         Raises:
             HTTPException: If `name` is "denied", raises an HTTPException with status 429 and detail "group busy".
         """
@@ -372,10 +373,10 @@ class _StubController:
     async def unload_model(self, name: str) -> None:
         """
         Record that a model unload was requested for the given model name.
-        
+
         Parameters:
             name (str): The model name to unload.
-        
+
         Raises:
             HTTPException: If `name` equals "missing", raises with status 400 and detail "not loaded".
         """
@@ -386,7 +387,7 @@ class _StubController:
     async def start_model(self, name: str) -> None:
         """
         Record a model start request and simulate a saturation error when the model name is "saturated".
-        
+
         Raises:
             HTTPException: with status code 429 and detail "group full" when `name` is "saturated".
         """
@@ -397,7 +398,7 @@ class _StubController:
     async def stop_model(self, name: str) -> None:
         """
         Record that a model stop was requested by appending its name to the internal `stopped` list.
-        
+
         Parameters:
             name (str): The name of the model to stop.
         """
@@ -406,9 +407,9 @@ class _StubController:
     async def reload_config(self) -> dict[str, Any]:
         """
         Produce a reload result payload and record that a reload was performed.
-        
+
         Increments the instance's `reload_count` and returns a dictionary describing which models were started, stopped, or left unchanged.
-        
+
         Returns:
             dict[str, Any]: A dictionary with three keys:
                 - 'started': list of model names that were started.
@@ -421,7 +422,7 @@ class _StubController:
     def get_status(self) -> dict[str, Any]:
         """
         Provide a static status snapshot containing two example models ("alpha" and "beta") and their runtime metadata.
-        
+
         Returns:
             dict: A status payload with keys:
                 - "timestamp" (float): Epoch timestamp for the snapshot.
@@ -475,7 +476,7 @@ class _StubController:
 def stub_service_state() -> _StubServiceState:
     """
     Provide a fresh _StubServiceState instance used by tests.
-    
+
     Returns:
         _StubServiceState: A new stub object representing service state with default counters, call lists, and flags.
     """
@@ -492,7 +493,7 @@ class _StubServiceClient:
     def __init__(self) -> None:
         """
         Initialize the stub service client used in tests.
-        
+
         Attributes:
             started (list[str]): Names of models passed to start_model, in call order.
             stopped (list[str]): Names of models passed to stop_model, in call order.
@@ -509,9 +510,9 @@ class _StubServiceClient:
     def is_available(self) -> bool:
         """
         Indicates whether the stub service is available.
-        
+
         Increments the `is_available_calls` counter each time it is invoked.
-        
+
         Returns:
             `true` if the service is available, `false` otherwise.
         """
@@ -521,7 +522,7 @@ class _StubServiceClient:
     def start_model(self, name: str) -> None:
         """
         Record that a model was started by appending its name to the internal `started` list.
-        
+
         Parameters:
             name (str): Name of the model to mark as started.
         """
@@ -530,7 +531,7 @@ class _StubServiceClient:
     def stop_model(self, name: str) -> None:
         """
         Record that a model was stopped by appending its name to the instance's stopped list.
-        
+
         Parameters:
             name (str): Name of the model to mark as stopped.
         """
@@ -539,7 +540,7 @@ class _StubServiceClient:
     def reload(self) -> dict[str, list[str]]:
         """
         Record that a reload was requested and return a stubbed reload result.
-        
+
         Returns:
             dict[str, list[str]]: Mapping with keys "started", "stopped", and "unchanged", each containing an empty list.
         """

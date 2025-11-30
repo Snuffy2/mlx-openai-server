@@ -57,11 +57,11 @@ class UpperChoice(click.Choice[str]):
     def normalize_choice(self, choice: str | None, ctx: click.Context | None) -> str | None:  # type: ignore[override]
         """
         Normalize a user's choice to the canonical option using case-insensitive matching.
-        
+
         Parameters:
             choice (str | None): User-supplied value; may be None.
             ctx (click.Context | None): Click context object (unused).
-        
+
         Returns:
             str | None: The canonical option string from `self.choices` that matches `choice` (preserving the original choice casing from `self.choices`), or `None` if `choice` is None.
         """
@@ -136,9 +136,9 @@ def _load_hub_config_or_fail(config_path: str | None) -> MLXHubConfig:
 def _controller_base_url(config: MLXHubConfig) -> str:
     """
     Determine the hub daemon's base HTTP URL, preferring a live runtime state when available.
-    
+
     When a transient runtime state file exists and contains host/port values, those are used (with validation of the port); otherwise the values from `config` or sensible defaults are used.
-    
+
     Returns:
         The base HTTP URL for the hub daemon, e.g. "http://host:port".
     """
@@ -166,10 +166,10 @@ def _controller_base_url(config: MLXHubConfig) -> str:
 def _runtime_state_path(config: MLXHubConfig) -> Path:
     """
     Get the path to the transient hub runtime state file.
-    
+
     Chooses the configured log directory when available; otherwise falls back to a "logs"
     directory in the current working directory and returns the full Path to "hub_runtime.json".
-    
+
     Returns:
         Path: Full path to the hub runtime state file.
     """
@@ -185,9 +185,9 @@ def _runtime_state_path(config: MLXHubConfig) -> Path:
 def _write_hub_runtime_state(config: MLXHubConfig, pid: int) -> None:
     """
     Persist transient hub runtime metadata to the hub runtime state file.
-    
+
     Writes a small JSON payload containing `pid`, `host`, `port`, and `started_at` to the runtime state file used by other CLI commands to locate a running daemon. The target path is derived from the provided `config` (typically under the configured logs directory). This operation is best-effort: it logs success on write and logs a warning on failure without raising exceptions.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration used to determine host, port, and runtime-state path.
         pid (int): Process ID of the running hub daemon to record.
@@ -210,9 +210,9 @@ def _write_hub_runtime_state(config: MLXHubConfig, pid: int) -> None:
 def _read_hub_runtime_state(config: MLXHubConfig) -> dict[str, object] | None:
     """
     Determine the persisted hub runtime state and return its PID, host, and port if the referenced process appears to be running.
-    
+
     Performs a best-effort liveness check of the PID stored in the runtime state file.
-    
+
     Returns:
         dict: A dictionary with keys `'pid'` (int), `'host'` (str), and `'port'` (int) when a valid runtime state exists and the process is alive, `None` otherwise.
     """
@@ -259,17 +259,17 @@ def _call_daemon_api(
 ) -> dict[str, object] | None:
     """
     Call the hub daemon HTTP API and return its parsed JSON payload.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration used to determine the daemon base URL.
         method (str): HTTP method (e.g., "GET", "POST").
         path (str): Request path starting with '/' to append to the base URL.
         json (object | None): JSON body to include with the request, if any.
         timeout (float): Request timeout in seconds.
-    
+
     Returns:
         dict[str, object] | None: Parsed JSON object from the response, `None` if the response has no content, or `{"raw": "<text>"}` if the body is non-JSON.
-    
+
     Raises:
         click.ClickException: If the daemon is unreachable or responds with a 4xx/5xx status.
     """
@@ -312,9 +312,9 @@ def _print_hub_status(
 ) -> None:
     """
     Print a formatted table of configured hub models and their runtime state.
-    
+
     Prints the hub log path and whether the status page is enabled, then lists configured models (filtered by `model_names` when provided) with columns NAME, STATE, LOADED, AUTO-UNLOAD, TYPE, GROUP, DEFAULT, and MODEL. When `live_status` is supplied, runtime metadata (such as process state, pid, port, and memory state) is used to enrich the displayed STATE and LOADED values.
-    
+
     Parameters:
         config (MLXHubConfig): The hub configuration containing models and display settings.
         model_names (Iterable[str] | None, optional): If provided, only models whose names appear in this iterable are displayed (blank names are ignored).
@@ -427,7 +427,7 @@ _FLASH_STYLES: dict[str, tuple[str, str]] = {
 def _flash(message: str, tone: Literal["info", "success", "warning", "error"] = "info") -> None:
     """
     Emit a short, colorized status line with a tone-specific prefix.
-    
+
     Parameters:
         message (str): Text to display.
         tone (Literal["info", "success", "warning", "error"]): One of four display tones that selects the prefix and color; defaults to "info".
@@ -458,9 +458,9 @@ def _format_name_list(values: Iterable[str] | None) -> str:
 def _emit_reload_summary(diff: dict[str, Any], *, header: str) -> None:
     """
     Emit a concise reload summary line to the console.
-    
+
     Formats the lists of started, stopped, and unchanged models from the provided diff and emits a single status line prefixed by `header`. Uses a `success` tone if any models started or stopped, otherwise `info`.
-    
+
     Parameters:
         diff (dict[str, Any]): Reload diff containing keys "started", "stopped", and "unchanged" with iterables of model names.
         header (str): Leading text to prefix the summary line.
@@ -505,13 +505,13 @@ def _reload_or_fail(config: MLXHubConfig, *, header: str) -> dict[str, Any]:
 def _require_service_client(config: MLXHubConfig) -> bool:
     """
     Verify that the hub daemon is reachable and responsive.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration used to locate the daemon.
-    
+
     Returns:
         True if the daemon is reachable.
-    
+
     Raises:
         click.ClickException: If the hub manager is not running.
     """
@@ -531,9 +531,9 @@ def _perform_memory_action_request(
 ) -> tuple[bool, str]:
     """
     Request a memory `load` or `unload` action for a model from the hub controller.
-    
+
     If the controller returns a JSON payload containing a `message` field that will be used as the returned message; otherwise a default confirmation text is returned. If a connectivity or API error occurs, the function returns `False` with the error text.
-    
+
     Returns:
         tuple[bool, str]: `success` is `True` if the request completed without raising a ClickException, `False` otherwise; `message` is the controller-provided message or an error description.
     """
@@ -561,12 +561,12 @@ def _run_memory_actions(
 ) -> None:
     """
     Initiate memory load or unload requests for multiple models and report per-model results.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration used to contact the daemon.
         model_names (Iterable[str]): Iterable of model names; blank names are skipped with a warning.
         action (Literal["load", "unload"]): Memory action to request for each model.
-    
+
     Raises:
         click.ClickException: If one or more memory actions fail.
     """
@@ -591,13 +591,13 @@ def _run_memory_actions(
 def _format_duration(seconds: float | None) -> str:
     """
     Format a duration in seconds into a compact human-readable string.
-    
+
     If `seconds` is None or negative, returns "-". For durations of one hour or more the result is formatted as
     "{hours}h{minutes:02d}m"; for durations of one minute or more as "{minutes}m{seconds:02d}s"; otherwise as "{seconds}s".
-    
+
     Parameters:
         seconds (float | None): Duration in seconds.
-    
+
     Returns:
         str: Compact formatted duration.
     """
@@ -616,13 +616,13 @@ def _format_duration(seconds: float | None) -> str:
 def _render_watch_table(models: Iterable[dict[str, Any]], *, now: float | None = None) -> str:
     """
     Format a fixed-width table describing hub-managed processes.
-    
+
     Parameters:
         models (Iterable[dict[str, Any]]): Iterable of model process records. Each record may include
             keys: "name", "state", "pid", "group", "started_at" (epoch seconds), "exit_code", and "log_path".
         now (float | None, optional): Reference UNIX timestamp used to compute UPTIME; if omitted the
             current time is used.
-    
+
     Returns:
         str: Multi-line string containing a table with headers NAME, STATE, PID, GROUP, UPTIME, EXIT, LOG.
              If `models` is empty, returns the string "  (no managed processes)".
@@ -676,9 +676,9 @@ def _render_watch_table(models: Iterable[dict[str, Any]], *, now: float | None =
 def _print_watch_snapshot(snapshot: dict[str, Any]) -> None:
     """
     Prints a timestamped status line and a formatted table describing hub-managed processes from a snapshot.
-    
+
     The snapshot may include a "timestamp" (Unix seconds) used for the header and a "models" list of per-model dictionaries. The function prints a one-line summary with counts of total, running, stopped, and failed models, then prints a multi-line table rendered from the models list.
-    
+
     Parameters:
         snapshot (dict[str, Any]): Snapshot data; expected keys:
             - "timestamp" (optional): numeric Unix timestamp used for the header if present.
@@ -851,9 +851,9 @@ def launch(
 ) -> None:
     """
     Start the single-model FastAPI/Uvicorn server using the provided configuration.
-    
+
     Constructs an MLXServerConfig from the arguments and runs the server lifecycle.
-    
+
     Parameters:
         model_type (str):
             Logical model category (e.g. "lm", "multimodal", "image-generation", "image-edit", "embeddings", "whisper").
@@ -867,7 +867,7 @@ def launch(
             Comma-separated scale(s) corresponding to `lora_paths`.
         auto_unload_minutes (int | None):
             Idle minutes before automatic model unload; only valid when JIT is enabled.
-    
+
     Raises:
         click.BadOptionUsage:
             If `auto_unload_minutes` is provided while JIT is not enabled.
@@ -933,12 +933,12 @@ def hub(
 def _start_hub_daemon(config: MLXHubConfig) -> subprocess.Popen[bytes] | None:
     """
     Start the hub daemon subprocess if no running daemon is detected.
-    
+
     If a hub manager is already reachable via its health endpoint, no action is taken.
-    
+
     Returns:
         The started subprocess.Popen[bytes] instance when a new daemon was launched, or `None` if a daemon was already running.
-    
+
     Raises:
         click.ClickException: If the hub configuration is not saved to disk or the daemon fails to start or become healthy within the startup timeout.
     """
@@ -989,12 +989,12 @@ def _start_hub_daemon(config: MLXHubConfig) -> subprocess.Popen[bytes] | None:
         def _log_output(stream: IO[bytes], level: str, prefix: str) -> None:
             """
             Read lines from a subprocess binary stream, decode them, and emit each non-empty line to the logger with a prefixed log message at the given level.
-            
+
             Parameters:
                 stream (IO[bytes]): Binary stream to read lines from (e.g., subprocess stdout or stderr).
                 level (str): Log level to use for each line; expected values include "info", "error", or others for debug.
                 prefix (str): Text prefix included in every logged message to identify the stream source.
-            
+
             Notes:
                 Any error encountered while reading the stream is caught and emitted as a logger warning.
             """
@@ -1058,9 +1058,9 @@ def _start_hub_daemon(config: MLXHubConfig) -> subprocess.Popen[bytes] | None:
 def _auto_start_default_models(config: MLXHubConfig) -> None:
     """
     Start models marked as default in the hub configuration by requesting the controller to start their processes.
-    
+
     Refreshes the controller state before taking action. For each configured model whose `is_default_model` flag is true, requests a process start; if the start request fails for a model that is not JIT-enabled, requests a memory load as a fallback. Emits user-facing status messages and logs non-fatal errors while continuing with other models.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration containing model definitions.
     """
@@ -1110,7 +1110,7 @@ def _auto_start_default_models(config: MLXHubConfig) -> None:
 def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
     Start the hub daemon (if not already running), persist transient runtime state when started, attempt to auto-start configured default models, and print the hub status and status-page URL.
-    
+
     Parameters:
         model_names (tuple[str, ...]): If provided, restricts which models are shown in the printed status; pass an empty tuple or None to show all models.
     """
@@ -1148,7 +1148,7 @@ def hub_start(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 def hub_status(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
     Display configured models and any active hub-managed processes.
-    
+
     If the hub daemon is reachable, fetches live status and prints a combined view; if unreachable, prints configured models and emits a warning.
     """
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
@@ -1183,7 +1183,7 @@ def hub_reload(ctx: click.Context) -> None:
 def hub_stop(ctx: click.Context) -> None:
     """
     Request the hub manager to shut down and stop all managed models.
-    
+
     If the hub daemon is not reachable, the command reports that nothing is running and exits without error.
     """
     config = _load_hub_config_or_fail(ctx.obj.get("hub_config_path"))
@@ -1215,12 +1215,12 @@ def hub_stop(ctx: click.Context) -> None:
 def hub_start_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
     Trigger start requests for one or more hub-managed models.
-    
+
     The command reloads the hub configuration and then issues a start request for each non-blank model name, emitting a success or error flash per model.
-    
+
     Parameters:
         model_names (tuple[str, ...]): Iterable of model names to start; blank entries are skipped.
-    
+
     Raises:
         click.UsageError: If no model names are provided or all provided names are blank.
     """
@@ -1250,8 +1250,9 @@ def hub_start_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 def hub_stop_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
     Request the hub daemon to stop the named models.
-    
+
     Synchronizes the hub configuration before sending a stop request for each provided model name. Raises a UsageError if no model names are provided. Blank model name entries are skipped with a warning; on config-sync failure a ClickException is raised. Per-model results are emitted as CLI status messages.
+
     Parameters:
         model_names (tuple[str, ...]): Tuple of model names to stop; whitespace-only names are ignored.
     """
@@ -1281,7 +1282,7 @@ def hub_stop_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 def hub_load_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
     Trigger memory load requests for each model in `model_names` via the hub controller.
-    
+
     Parameters:
         model_names (tuple[str, ...]): Model names to load; blank or empty names are skipped.
     """
@@ -1295,7 +1296,7 @@ def hub_load_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 def hub_unload_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
     """
     Unload the specified models from memory using the hub controller.
-    
+
     Parameters:
         model_names (tuple[str, ...]): Names of the models to request memory unload for.
     """
@@ -1315,7 +1316,7 @@ def hub_unload_model(ctx: click.Context, model_names: tuple[str, ...]) -> None:
 def hub_watch(ctx: click.Context, interval: float) -> None:
     """
     Poll the hub manager service and display live status snapshots until interrupted.
-    
+
     Parameters:
         interval (float): Seconds between refreshes; values less than 0.5 are treated as 0.5.
     """

@@ -48,7 +48,7 @@ class MLXLMHandler:
     ) -> None:
         """
         Initialize the MLX language model handler and its runtime resources.
-        
+
         Parameters:
             model_path (str): Path to the model directory or file used to instantiate the underlying MLX_LM.
             context_length (int): Maximum context length (token window) the model should use.
@@ -118,13 +118,13 @@ class MLXLMHandler:
     def _count_message_tokens(self, messages: list[dict[str, str]], **kwargs: Any) -> int:
         """
         Return the number of prompt tokens for a sequence of chat messages after applying the model's chat template.
-        
+
         If applying the chat template fails, falls back to a rough token estimate computed from the concatenated text content of the messages.
-        
+
         Parameters:
             messages (list[dict[str, str]]): Chat messages in the model's expected format.
             **kwargs: Forwarded to the tokenizer's `apply_chat_template` (e.g., template options).
-        
+
         Returns:
             int: The estimated number of prompt tokens.
         """
@@ -180,7 +180,7 @@ class MLXLMHandler:
     async def get_models(self) -> list[dict[str, Any]]:
         """
         Return a list of available models with their metadata.
-        
+
         Returns:
             list[dict[str, Any]]: A list of model entries where each entry contains keys:
                 - `id` (str): Model identifier (model path).
@@ -206,12 +206,12 @@ class MLXLMHandler:
     async def initialize(self, queue_config: dict[str, Any] | None = None) -> None:
         """
         Initialize the handler and start the internal request queue.
-        
+
         If provided, `queue_config` overrides the existing RequestQueue settings. Supported keys:
         - `max_concurrency` (int): maximum concurrent worker tasks.
         - `timeout` (float | int): per-request processing timeout in seconds.
         - `queue_size` (int): maximum number of queued requests.
-        
+
         Parameters:
             queue_config (dict[str, Any] | None): Optional configuration for the request queue.
         """
@@ -231,10 +231,10 @@ class MLXLMHandler:
     ) -> AsyncGenerator[str | dict[str, Any], None]:
         """
         Stream text completions for a chat request, yielding incremental output chunks and a final usage report.
-        
+
         Parameters:
             request (ChatCompletionRequest): Chat completion request containing messages and model parameters.
-        
+
         Yields:
             str: Incremental text chunks from the model as they become available.
             dict: A single final dictionary with key "__usage__" whose value is a UsageInfo object summarizing token usage (`prompt_tokens`, `completion_tokens`, `total_tokens`).
@@ -358,10 +358,10 @@ class MLXLMHandler:
     async def generate_text_response(self, request: ChatCompletionRequest) -> dict[str, Any]:
         """
         Generate a completed text chat response and associated token usage for the given chat completion request.
-        
+
         Parameters:
             request (ChatCompletionRequest): Chat completion request containing messages and model parameters.
-        
+
         Returns:
             dict: A mapping with keys:
                 - "response": the model response, which may be a raw string, a parser-specific structured value, or a dict with keys
@@ -572,7 +572,7 @@ class MLXLMHandler:
     async def cleanup(self) -> None:
         """
         Stop the request queue and release handler resources before shutdown.
-        
+
         Stops the request queue if present and performs best-effort cleanup; any errors are logged and not re-raised.
         """
         try:
@@ -589,13 +589,13 @@ class MLXLMHandler:
     ) -> tuple[list[dict[str, str]], dict[str, Any]]:
         """
         Prepare and normalize a chat completion request into model-ready messages and parameters.
-        
+
         Parameters:
             request (ChatCompletionRequest): The incoming chat completion request to validate and convert.
-        
+
         Returns:
             tuple[list[dict[str, str]], dict[str, Any]]: A tuple where the first element is a list of chat message dictionaries (system message merged at index 0 when present) and the second element is the remaining model parameter dictionary ready to pass to the model.
-        
+
         Raises:
             HTTPException: Raised with status 400 if the request cannot be processed or validated.
         """

@@ -26,7 +26,7 @@ class _MockHandlerManager:
     def __init__(self, model_path: str) -> None:
         """
         Initialize the mock handler manager for a given model path and default state.
-        
+
         Parameters:
             model_path (str): Filesystem path or identifier of the model associated with this handler.
         """
@@ -37,7 +37,7 @@ class _MockHandlerManager:
     def is_vram_loaded(self) -> bool:
         """
         Check whether the model's handler is present in memory, indicating VRAM is loaded.
-        
+
         Returns:
             `true` if a handler is present (VRAM is loaded), `false` otherwise.
         """
@@ -46,10 +46,10 @@ class _MockHandlerManager:
     async def ensure_loaded(self, reason: str = "request") -> Any:
         """
         Ensure a mock handler exists for this manager and return it.
-        
+
         Parameters:
             reason (str): Optional human-readable reason for loading.
-        
+
         Returns:
             Any: The handler object if loaded, otherwise `None`.
         """
@@ -61,12 +61,12 @@ class _MockHandlerManager:
     async def unload(self, reason: str = "manual") -> bool:
         """
         Unload the current handler and mark the manager as not loaded.
-        
+
         Parameters:
-        	reason (str): Optional textual reason for the unload action (defaults to "manual"). For this mock implementation the value is informational only.
-        
+                reason (str): Optional textual reason for the unload action (defaults to "manual"). For this mock implementation the value is informational only.
+
         Returns:
-        	true if the manager is now unloaded (handler cleared).
+                true if the manager is now unloaded (handler cleared).
         """
         self._handler = None
         return True
@@ -79,9 +79,9 @@ class _TestHubSupervisor(HubSupervisor):
         # Don't call super().__init__ to avoid registry setup
         """
         Initialize a test-focused HubSupervisor shim and populate in-memory model records from the provided hub configuration.
-        
+
         This constructor intentionally does not call the superclass initializer; it sets up minimal state required for tests: stores the given hub_config, disables registry use, creates an asyncio lock, a background task list, and a shutdown flag. For each model in hub_config.models it adds a MagicMock record keyed by model name; each record contains: name, config, group, is_default, model_path, auto_unload_minutes, manager (initially None), started_at (initially None), and exit_code (initially None).
-        
+
         Parameters:
             hub_config (MLXHubConfig): Hub configuration whose `models` iterable will be used to create the in-memory model records. Each model may be an object with attributes `name`, `group`, `is_default_model`, `model_path`, and `auto_unload_minutes`; when an attribute is missing a reasonable default is used.
         """
@@ -114,12 +114,12 @@ def hub_config_with_defaults(
 ) -> MLXHubConfig:
     """
     Create an MLXHubConfig populated with one default model and one regular model.
-    
+
     Parameters:
         tmp_path (Path): Temporary directory used as the hub's source_path and base for log_path.
         make_model_mock (Callable[..., MagicMock]): Factory that returns a mocked model config when called as
             make_model_mock(name, model_path, model_type, **kwargs).
-    
+
     Returns:
         MLXHubConfig: Hub configuration whose `models` list contains:
             - a model named "default_model" with `is_default=True` and model_path "/models/default"
@@ -162,9 +162,9 @@ def hub_config_with_defaults(
 def mock_handler_manager() -> MagicMock:
     """
     Create a MagicMock that simulates a LazyHandlerManager for tests.
-    
+
     The mock has `is_vram_loaded()` returning `False`, `ensure_loaded` as an AsyncMock, and `unload` as an AsyncMock that returns `True`.
-    
+
     Returns:
         MagicMock: A mock LazyHandlerManager configured for testing.
     """
@@ -245,12 +245,12 @@ async def test_model_stop_unloads_and_clears_state(hub_config_with_defaults: MLX
 async def test_model_load_and_unload(hub_config_with_defaults: MLXHubConfig) -> None:
     """
     Verifies that a supervisor can load and then unload a non-default model.
-    
+
     This test starts the regular model to ensure a handler manager is present, then calls
     load_model and asserts it reports the model as loaded, and calls unload_model and
     asserts it reports the model as unloaded and that the manager's unload method was
     invoked with the reason "unload".
-    
+
     Parameters:
         hub_config_with_defaults (MLXHubConfig): Test hub configuration containing a default and a regular model.
     """
@@ -349,7 +349,7 @@ async def test_default_models_auto_start_during_lifespan(
 ) -> None:
     """
     Verify that models marked as default in the hub configuration are started automatically during the application's lifespan.
-    
+
     Parameters:
         tmp_path (Path): Temporary filesystem path provided by the test runner.
         write_hub_yaml (Callable[[str, str], Path]): Fixture that writes the given YAML content to a file and returns its Path.
@@ -378,10 +378,10 @@ models:
     async def mock_start_model(name: str) -> dict[str, Any]:
         """
         Record that a model was requested to start and report it as loaded.
-        
+
         Parameters:
             name (str): The model's name.
-        
+
         Returns:
             dict[str, Any]: A dictionary with keys `"status"` set to `"loaded"` and `"name"` equal to the provided model name.
         """
@@ -410,7 +410,7 @@ async def test_hub_api_endpoints_call_supervisor_methods(
 ) -> None:
     """
     Verify hub HTTP endpoints invoke the supervisor's start, stop, load, and unload methods with the correct model name.
-    
+
     Parameters:
         tmp_path (Path): Temporary directory fixture provided by pytest.
         write_hub_yaml (Callable[[str, str], Path]): Fixture that writes the given YAML content to a config file and returns its Path.

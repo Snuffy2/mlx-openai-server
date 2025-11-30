@@ -37,21 +37,21 @@ def test_hub_reload_cli_reloads_service(
     ) -> dict[str, Any]:
         """
         Handle test stub calls to the daemon API for specific endpoints used by CLI tests.
-        
+
         This stub responds to:
         - POST /hub/reload: delegates to the test `stub.reload()` and returns its result.
         - GET /health: returns {"status": "ok"}.
-        
+
         Parameters:
             _config: Ignored configuration object included to match the real call signature.
             method: HTTP method of the request (e.g., "GET", "POST").
             path: Request path being called.
             json: Optional JSON payload (ignored).
             timeout: Request timeout in seconds (ignored).
-        
+
         Returns:
             A dictionary with the endpoint response (the reload result or health status).
-        
+
         Raises:
             RuntimeError: If called with any method/path combination other than the two supported above.
         """
@@ -89,20 +89,20 @@ def test_hub_stop_cli_requests_shutdown(
         # emulate availability check and reload/shutdown behavior
         """
         Test stub that simulates the daemon HTTP API and triggers side effects on the provided service stub.
-        
+
         Parameters:
             _config (MLXHubConfig): Hub configuration passed by the caller (not used by the stub).
             method (str): HTTP method of the simulated request (e.g., "GET", "POST").
             path (str): Request path to route (e.g., "/health", "/hub/reload", "/hub/models/<name>/start").
             json (dict[str, object] | None): Request JSON payload if any (ignored by this stub).
             timeout (float): Request timeout in seconds (ignored by this stub).
-        
+
         Returns:
             dict[str, Any]: A response-like dictionary for the handled endpoint (e.g., {"status": "ok"}, {"message": "started"}).
-        
+
         Raises:
             RuntimeError: If the method/path combination is not recognized by the stub.
-        
+
         Side effects:
             May call methods on the test `stub` object: `reload()`, `shutdown()`, `start_model(name)`, and `stop_model(name)`, causing observable test-side state changes.
         """
@@ -154,22 +154,22 @@ def test_hub_start_model_cli_uses_service_client(
     ) -> dict[str, Any]:
         """
         Handle stubbed daemon API calls used by CLI tests.
-        
+
         Supports the following endpoints:
         - POST /hub/models/{name}/start: invokes stub.start_model(name) and returns {"message": "started"}.
         - POST /hub/reload: returns the value from stub.reload().
         - GET /health: returns {"status": "ok"}.
-        
+
         Parameters:
             _config (MLXHubConfig): Ignored; present to match the real API signature.
             method (str): HTTP method of the simulated request (e.g., "GET", "POST").
             path (str): Request path; used to determine which stub action to perform.
             json (dict[str, object] | None): Ignored payload included for signature compatibility.
             timeout (float): Ignored timeout included for signature compatibility.
-        
+
         Returns:
             dict[str, Any]: The simulated JSON response for the handled endpoint.
-        
+
         Raises:
             RuntimeError: If an unexpected method/path combination is received.
         """
@@ -211,22 +211,22 @@ def test_hub_stop_model_cli_uses_service_client(
     ) -> dict[str, Any]:
         """
         Test stub that simulates daemon API responses for a subset of hub endpoints used by CLI tests.
-        
+
         Routes supported:
         - POST /hub/models/{name}/stop: records a stop on the stubbed service and returns {"message": "stopped"}.
         - POST /hub/reload: delegates to the stub's reload() and returns its result.
         - GET /health: returns {"status": "ok"}.
-        
+
         Parameters:
             _config (MLXHubConfig): Ignored; present to match the real API signature.
             method (str): HTTP method of the simulated request (e.g., "GET", "POST").
             path (str): Request path; used to determine which stubbed action to invoke.
             json (dict[str, object] | None): Ignored payload for the stub.
             timeout (float): Ignored timeout value for the stub.
-        
+
         Returns:
             dict[str, Any]: A JSON-like response for the handled route.
-        
+
         Raises:
             RuntimeError: If the stub receives an unexpected method/path combination.
         """
@@ -307,9 +307,9 @@ def test_hub_load_model_cli_calls_controller(
     def _fake_run_actions(_config: object, names: tuple[str, ...], action: str) -> None:
         """
         Capture model action requests for test assertions.
-        
+
         Appends a tuple (names, action) to the surrounding `captured` list so tests can verify which model names and action were requested.
-        
+
         Parameters:
             _config (object): Configuration object (unused by this helper).
             names (tuple[str, ...]): Model names targeted by the action.
@@ -345,7 +345,7 @@ def test_hub_unload_model_cli_surfaces_errors(
     def _fake_run_actions(_config: object, _names: tuple[str, ...], _action: str) -> None:
         """
         Always raises a ClickException with the message "boom: test".
-        
+
         Raises:
             click.ClickException: Raised unconditionally to simulate a failing action.
         """
@@ -394,10 +394,10 @@ models:
     def mock_load_config(config_path: str | None) -> MLXHubConfig:
         """
         Create a minimal MLXHubConfig for tests and record the provided config path.
-        
+
         Parameters:
             config_path (str | None): Path to the configuration file provided to the CLI, or `None` if none was supplied.
-        
+
         Returns:
             MLXHubConfig: A minimal configuration with an empty models list, host "127.0.0.1", port 8000, status page disabled, and `log_path` set to the test temporary logs directory.
         """

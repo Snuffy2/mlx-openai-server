@@ -55,7 +55,7 @@ class HubServiceError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
         """
         Initialize the HubServiceError with an error message and optional HTTP status code.
-        
+
         Parameters:
             message (str): Human-readable error message describing the service error.
             status_code (int | None): Optional HTTP status code associated with the error; may be None.
@@ -72,14 +72,14 @@ def start_hub_service_process(
 ) -> int:
     """
     Launches a background hub daemon process configured to use the given hub config path.
-    
+
     Starts a new subprocess (using the current Python interpreter) that runs the hub daemon and sets the MLX_HUB_CONFIG_PATH environment variable for that process. Background threads are started to stream the daemon's stdout and stderr into the application's logs.
-    
+
     Parameters:
         config_path (str): Filesystem path to the hub configuration file used by the daemon.
         host (str | None): Optional network interface to bind the daemon to; if omitted, the module default is used.
         port (int | None): Optional TCP port for the daemon to listen on; if omitted, the module default is used.
-    
+
     Returns:
         int: The PID of the spawned daemon process.
     """
@@ -113,9 +113,9 @@ def start_hub_service_process(
     def _log_output(stream: IO[bytes], level: str, prefix: str) -> None:
         """
         Stream lines read from a subprocess binary stream to the module logger, prefixing each logged line.
-        
+
         Reads bytes lines from `stream`, decodes them as UTF-8 (replacing invalid sequences), strips trailing whitespace, and logs each non-empty line at the level indicated by `level` ("info" => info, "error" => error, other => debug) with `prefix` prepended.
-        
+
         Parameters:
             stream (IO[bytes]): Binary readable stream from a subprocess (e.g., stdout or stderr).
             level (str): Log level hint; expected values are "info" or "error". Any other value logs at debug level.
@@ -173,9 +173,9 @@ def _retain_task(task: asyncio.Task[Any]) -> None:
     def _on_done(t: asyncio.Task[Any]) -> None:
         """
         Remove a completed background asyncio Task from the module's retained task set.
-        
+
         Intended as a done-callback for asyncio.Tasks; discards the provided task from the module-scoped _background_tasks set and suppresses any exceptions raised during removal.
-        
+
         Parameters:
             t (asyncio.Task[Any]): The completed task to remove.
         """
@@ -192,12 +192,12 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / 
 def _resolve_hub_config_path(raw_request: Request) -> Path:
     """
     Resolve which hub configuration file path should be used for the incoming request.
-    
+
     Checks for an explicit override on request.app.state.hub_config_path, then falls back to server_config.source_path if present, and finally returns the module default path.
-    
+
     Parameters:
         raw_request (Request): The incoming FastAPI request whose application state is inspected.
-    
+
     Returns:
         Path: The resolved filesystem path to the hub configuration file.
     """
@@ -219,10 +219,10 @@ def _resolve_hub_config_path(raw_request: Request) -> Path:
 def _stop_controller_process(config: MLXHubConfig) -> bool:
     """
     Request the hub daemon to stop the controller and any supervised model processes.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration used to compute the daemon base URL.
-    
+
     Returns:
         bool: `true` if the controller was stopped, `false` otherwise.
     """
@@ -252,10 +252,10 @@ def _load_hub_config_from_request(raw_request: Request) -> MLXHubConfig:
 def _daemon_base_url(config: MLXHubConfig) -> str:
     """
     Constructs the base HTTP URL for the hub daemon using the provided configuration.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration providing `host` and `port` used to build the URL.
-    
+
     Returns:
         str: The base HTTP URL (e.g. "http://host:port"). IPv6 hosts are normalized with brackets and wildcard addresses are mapped to the configured default API host.
     """
@@ -281,12 +281,12 @@ async def _call_daemon_api_async(
 ) -> dict[str, object] | None:
     """
     Call the hub daemon HTTP API and return the parsed response payload.
-    
+
     When the response body is a JSON object (dict), that dict is returned. If the response body is JSON but not a dict or is non-JSON text, the payload is returned as {"raw": ...}. If the response has no body, returns None.
-    
+
     Returns:
         dict[str, object] | None: Parsed response payload, `{"raw": ...}` for non-dict payloads, or `None` for empty responses.
-    
+
     Raises:
         HubServiceError: If the request fails due to network errors or the daemon responds with a non-2xx status (the exception's `status_code` will be set when available).
     """
@@ -332,19 +332,19 @@ def _call_daemon_api_sync(
 ) -> dict[str, object] | None:
     """
     Make a synchronous HTTP request to the hub daemon and return the parsed response payload.
-    
+
     Builds the daemon URL from the provided config and issues an HTTP request to the given path using the specified method and JSON body. Treats any network/connectivity failure or any HTTP response with status code >= 400 as a HubServiceError. If the response has JSON content and it is an object, that object is returned; if the response has non-object JSON or non-JSON content the result is returned wrapped as `{"raw": ...}`; if the response has no content `None` is returned.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration used to derive the daemon base URL.
         method (str): HTTP method to use (e.g., "GET", "POST").
         path (str): Request path appended to the daemon base URL.
         json (object | None): Optional JSON body to send with the request.
         timeout (float): Request timeout in seconds.
-    
+
     Returns:
         dict[str, object] | None: Parsed JSON object from the response, or `{"raw": ...}` for non-object responses, or `None` if there is no response body.
-    
+
     Raises:
         HubServiceError: On connectivity failures or on HTTP responses with status code >= 400.
     """
@@ -437,7 +437,7 @@ def _hub_config_error_response(reason: str) -> JSONResponse:
 def _manager_unavailable_response() -> JSONResponse:
     """
     Builds a JSONResponse indicating the hub manager is unavailable.
-    
+
     Returns:
         JSONResponse: Response containing an error payload with HTTP status 503 (Service Unavailable).
     """
@@ -454,7 +454,7 @@ def _manager_unavailable_response() -> JSONResponse:
 def _controller_unavailable_response() -> JSONResponse:
     """
     Builds a JSON response indicating the hub controller is unavailable.
-    
+
     Returns:
         JSONResponse: Error response with HTTP 503 (Service Unavailable) and `error_type` set to "service_unavailable".
     """
@@ -471,16 +471,16 @@ def _controller_unavailable_response() -> JSONResponse:
 def _controller_error_response(exc: Exception) -> JSONResponse:
     """
     Convert a hub controller exception into a standardized JSON API error response.
-    
+
     If the exception contains an HTTP status (e.g., `HTTPException`), its status and detail
     are preserved in the response; otherwise a generic user-facing message is returned.
     The response's `error_type` is chosen from `invalid_request_error`, `rate_limit_error`,
     or `service_unavailable` based on the resolved status code.
-    
+
     Parameters:
         exc (Exception): The controller exception to convert. May be a FastAPI `HTTPException`
             or a controller-specific error exposing a `status_code` attribute.
-    
+
     Returns:
         JSONResponse: A JSON response built with `create_error_response(...)` containing
         `message`, `type`, and using the resolved HTTP status code.
@@ -533,10 +533,10 @@ def _registry_unavailable_response() -> JSONResponse:
 def _registry_error_response(exc: Exception) -> JSONResponse:
     """
     Create a JSONResponse representing a ModelRegistry error by mapping the exception to an HTTP status and a standardized error type.
-    
+
     Parameters:
         exc (Exception): The exception raised by the registry. If the exception has a `status_code` attribute that will be used as the response status.
-    
+
     Returns:
         JSONResponse: A response whose body is an error payload with the exception message and an `error_type` chosen as follows:
             - `rate_limit_error` when the status is 429 (Too Many Requests)
@@ -562,10 +562,10 @@ def _registry_error_response(exc: Exception) -> JSONResponse:
 def _normalize_model_name(model_name: str) -> str:
     """
     Normalize a model identifier by removing leading and trailing whitespace.
-    
+
     Parameters:
         model_name (str): Model identifier possibly containing surrounding whitespace.
-    
+
     Returns:
         str: The model identifier with leading and trailing whitespace removed.
     """
@@ -575,12 +575,12 @@ def _normalize_model_name(model_name: str) -> str:
 def _model_created_timestamp(config: MLXHubConfig) -> int:
     """
     Return a creation timestamp for models defined by the hub config.
-    
+
     If the config provides a valid source_path file, the file's modification time is used; otherwise the current time is returned.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration whose source_path may determine the timestamp.
-    
+
     Returns:
         int: Unix timestamp (seconds since epoch) representing the model creation time.
     """
@@ -599,11 +599,11 @@ def _build_models_from_config(
 ) -> tuple[list[Model], HubStatusCounts]:
     """
     Builds a list of Model objects and overall model counts from a hub configuration and an optional live status snapshot.
-    
+
     Parameters:
         config (MLXHubConfig): Hub configuration containing declared models and their settings.
         live_snapshot (dict[str, Any] | None): Optional runtime snapshot returned by the hub service; used to enrich each model's runtime metadata (state, memory_state, pid, port, timestamps, etc.).
-    
+
     Returns:
         tuple[list[Model], HubStatusCounts]: A tuple where the first element is the list of models populated with metadata, and the second element is a HubStatusCounts instance with counts for registered, started (processes running), and loaded (memory-resident) models.
     """
@@ -678,10 +678,10 @@ def _build_models_from_config(
 def get_running_hub_models(raw_request: Request) -> set[str] | None:
     """
     Determine which configured hub models currently have running processes.
-    
+
     Parameters:
         raw_request (Request): FastAPI request used to resolve hub configuration and contact the hub daemon.
-    
+
     Returns:
         set[str] containing model names whose state is "running", or `None` if the hub service or configuration is unavailable.
     """
@@ -721,9 +721,9 @@ def get_running_hub_models(raw_request: Request) -> set[str] | None:
 def get_cached_model_metadata(raw_request: Request) -> dict[str, Any] | None:
     """
     Return the cached model metadata dictionary from the application's state, if present.
-    
+
     Checks app.state.model_metadata and returns the first list entry when it is a dict; returns None otherwise.
-    
+
     Returns:
         dict: Cached model metadata dictionary, or None if no cached metadata is available.
     """
@@ -738,8 +738,9 @@ def get_cached_model_metadata(raw_request: Request) -> dict[str, Any] | None:
 def get_configured_model_id(raw_request: Request) -> str | None:
     """
     Determine the configured model identifier for the current request.
-    
+
     Checks, in order: the application's server_config.model_identifier, then server_config.model_path, and finally the cached model metadata's "id". Returns None when no identifier is found.
+
     Returns:
         The model identifier string if available, otherwise `None`.
     """
@@ -760,9 +761,9 @@ def get_configured_model_id(raw_request: Request) -> str | None:
 async def hub_status(raw_request: Request) -> HubStatusResponse:
     """
     Produce the hub manager status including model list and counts.
-    
+
     Loads the hub configuration and attempts to obtain a live status snapshot from the in-process controller (if present) or from the hub daemon HTTP API. Aggregates configured models with the live snapshot, collects any warnings encountered while querying the manager, and indicates whether a local controller is available.
-    
+
     Returns:
         HubStatusResponse: Aggregated hub status containing `status` (\"ok\" when a snapshot was obtained, otherwise \"degraded\"), `timestamp`, `host`, `port`, `models`, `counts`, `warnings`, and `controller_available`.
     """
@@ -833,10 +834,10 @@ async def hub_status(raw_request: Request) -> HubStatusResponse:
 async def hub_status_page(raw_request: Request) -> HTMLResponse:
     """
     Serve the hub status HTML dashboard to operators.
-    
+
     Raises:
         HTTPException: 404 if the hub configuration cannot be loaded or if the status page is disabled.
-    
+
     Returns:
         HTMLResponse: Rendered `hub_status.html.jinja` template for the request.
     """
@@ -868,12 +869,12 @@ async def hub_status_page(raw_request: Request) -> HTMLResponse:
 async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
     """
     Start the hub manager process if it is not already running and return the start result.
-    
+
     Uses the incoming request to resolve hub configuration and application state. If the hub manager is already healthy, returns an OK response indicating no action was needed. If the configuration is not saved to disk or the daemon fails to become healthy within 10 seconds, returns a JSONResponse containing an error payload. On successful start, includes the started process PID and, if available, the current models snapshot.
-    
+
     Parameters:
         raw_request (Request): FastAPI request used to locate hub configuration and application state.
-    
+
     Returns:
         HubServiceActionResponse: On successful start (or when already running), contains action, message, and details such as `pid` and optional `models`.
         JSONResponse: On failure, contains a structured error payload (e.g., configuration errors or service unavailable).
@@ -950,9 +951,9 @@ async def hub_service_start(raw_request: Request) -> HubServiceActionResponse | 
 async def hub_service_stop(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
     """
     Request shutdown of the hub controller and manager service and return a summary of the outcome.
-    
+
     Attempts to stop an in-process controller (if present) and asks the hub daemon to reload and then shut down. If the hub configuration cannot be loaded or the daemon interaction fails, the function returns an appropriate JSON error response.
-    
+
     Returns:
         HubServiceActionResponse: Summary indicating whether the controller was stopped and whether the manager shutdown was requested.
         JSONResponse: Error response when hub configuration is invalid or daemon communication fails.
@@ -996,9 +997,9 @@ async def hub_service_stop(raw_request: Request) -> HubServiceActionResponse | J
 async def hub_service_reload(raw_request: Request) -> HubServiceActionResponse | JSONResponse:
     """
     Reload the hub configuration in the running manager and return the configuration diff.
-    
+
     Uses an in-process controller when available; otherwise issues a reload request to the hub daemon and returns the resulting diff.
-    
+
     Returns:
         HubServiceActionResponse: Contains action status, a message, and `details` with the reload diff.
         JSONResponse: An error response when configuration loading or the hub service is unavailable.
@@ -1048,12 +1049,12 @@ async def hub_start_model(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Request the hub manager to start the specified model.
-    
+
     The optional `payload` parameter is reserved for future use and is not currently used.
-    
+
     Parameters:
         payload (HubModelActionRequest | None): Reserved for future compatibility; ignored by the current implementation.
-    
+
     Returns:
         HubModelActionResponse with the result of the start action, or JSONResponse on error.
     """
@@ -1069,12 +1070,12 @@ async def hub_stop_model(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Request the hub manager to stop the model identified by `model_name`.
-    
+
     Parameters:
         model_name (str): The name of the model to stop.
         raw_request (Request): The incoming request context.
         payload (HubModelActionRequest | None): Reserved for future compatibility; additional request payload (currently unused).
-    
+
     Returns:
         HubModelActionResponse or JSONResponse: Result of the stop action or an error response.
     """
@@ -1089,11 +1090,11 @@ async def hub_load_model(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Request the in-process controller to load the specified model into memory.
-    
+
     Parameters:
         model_name (str): Name of the model to load.
         raw_request (Request): Incoming FastAPI request used to resolve hub config and controller.
-    
+
     Returns:
         HubModelActionResponse or JSONResponse: Result of the load operation or an error response.
     """
@@ -1130,12 +1131,12 @@ async def hub_vram_load(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Request that a registered model be loaded into VRAM via the application's ModelRegistry.
-    
+
     Parameters:
         payload (HubModelActionRequest | None): Optional action parameters; recognized fields:
             - force (bool): If true, force VRAM residency even if eviction or other constraints apply.
             - timeout (int | None): Optional timeout in seconds for the VRAM load request.
-    
+
     Returns:
         HubModelActionResponse: On success, a response object with status "ok", action "load", the model name, and a message.
         JSONResponse: On failure or invalid input, an HTTP error response describing the problem.
@@ -1176,12 +1177,12 @@ async def hub_vram_unload(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Request VRAM unload for a registered model through the application's ModelRegistry.
-    
+
     Parameters:
         model_name (str): Name or identifier of the model to release from VRAM.
         raw_request (Request): Incoming request; used to access app.state.model_registry.
         payload (HubModelActionRequest | None): Optional action parameters; `timeout` may be honored by the registry.
-    
+
     Returns:
         HubModelActionResponse: Confirmation with status "ok", action "unload", model name, and a message when the unload request is accepted.
         JSONResponse: Error response describing why the request failed (e.g., invalid name, registry unavailable, or registry error).
@@ -1217,9 +1218,9 @@ async def hub_shutdown(
 ) -> HubServiceActionResponse | JSONResponse:
     """
     Request that the hub manager shut down all managed models and exit.
-    
+
     If an in-process controller is available, schedules a controller shutdown (and then the server process) as background tasks; otherwise forwards the shutdown request to the hub daemon. On configuration load failure returns a configuration error response.
-    
+
     Returns:
         HubServiceActionResponse: Confirmation that shutdown was requested on success.
         JSONResponse: Error details when the request cannot be processed (e.g., invalid config or service error).
@@ -1239,7 +1240,7 @@ async def hub_shutdown(
         async def shutdown_server() -> None:
             """
             Request a server shutdown by exiting the process after a short delay.
-            
+
             Delays for 1 second to allow any outgoing response to be transmitted, then terminates the Python process with exit code 0.
             """
             await asyncio.sleep(1)  # Give time for response to be sent
@@ -1273,7 +1274,7 @@ async def _hub_model_service_action(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Perform a start or stop action for a hub-managed model using the in-process controller when available, falling back to the hub daemon API.
-    
+
     Returns:
         HubModelActionResponse on success; a JSONResponse containing an error payload on failure.
     """
@@ -1339,9 +1340,9 @@ async def _hub_memory_controller_action(
 ) -> HubModelActionResponse | JSONResponse:
     """
     Perform an in-process memory load or unload for a named model using the local hub controller.
-    
+
     If the request is cancelled (for example, client disconnect) the controller operation is scheduled to continue in the background and the response will indicate background execution. Broken pipe errors during initiation are handled by scheduling the action in the background and returning a background-in-progress message.
-    
+
     Returns:
         HubModelActionResponse on success; JSONResponse for validation failures or when the controller is unavailable or reports an error.
     """

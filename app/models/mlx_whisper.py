@@ -45,7 +45,7 @@ class MLX_Whisper:
     def __init__(self, model_path: str) -> None:
         """
         Initialize the MLX_Whisper wrapper with the model identifier or local path.
-        
+
         Parameters:
             model_path (str): Local filesystem path or Hugging Face repository identifier for the Whisper model used for transcription.
         """
@@ -58,15 +58,15 @@ class MLX_Whisper:
     ) -> Generator[dict[str, Any], None, None]:
         """
         Stream the audio file as sequential CHUNK_SIZE-second segments and yield transcription results for each segment.
-        
+
         Each yielded dictionary contains the transcription fields produced by the underlying transcribe call, with two additional keys:
         - `chunk_start` (float): segment start time in seconds.
         - `chunk_end` (float): segment end time in seconds.
-        
+
         Parameters:
             audio_path (str): Path to the audio file to transcribe.
             **kwargs: Passed through to the underlying `transcribe` call.
-        
+
         Returns:
             Generator[dict[str, Any], None, None]: Generator that yields transcription dictionaries for each audio segment.
         """
@@ -103,12 +103,12 @@ class MLX_Whisper:
     ) -> Generator[dict[str, Any], None, None] | dict[str, Any]:
         """
         Transcribe an audio file either as a single result or as a generator of chunked results.
-        
+
         Parameters:
             audio_path (str): Path to the audio file to transcribe.
             stream (bool): If True, return a generator that yields transcription dictionaries for fixed-size time chunks; if False, return a single transcription dictionary for the whole file.
             **kwargs: Additional keyword arguments forwarded to the underlying transcribe() call.
-        
+
         Returns:
             Generator[dict[str, Any], None, None] | dict[str, Any]:
                 - If `stream` is True: a generator that yields transcription dictionaries for each chunk. Each chunk dict includes `chunk_start` and `chunk_end` timestamps plus the transcription fields produced by transcribe().

@@ -45,7 +45,7 @@ class MLXEmbeddingsHandler:
     async def get_models(self) -> list[dict[str, Any]]:
         """
         Provide metadata for the available local model.
-        
+
         Returns:
             A list containing a single dictionary with the model's metadata:
             - `id`: model path
@@ -124,16 +124,16 @@ class MLXEmbeddingsHandler:
     async def _process_request(self, request_data: dict[str, Any]) -> list[list[float]]:
         """
         Process a queued request and return embeddings for the provided text inputs.
-        
+
         Parameters:
             request_data (dict): Request payload that must include:
                 - "type" (str): Expected to be "embeddings".
                 - "input" (list[str]): Texts to embed.
                 - "max_length" (int, optional): Maximum token length for the model (defaults to 512).
-        
+
         Returns:
             list[list[float]]: Embedding vectors, one list of floats per input text.
-        
+
         Raises:
             ValueError: If `request_data["type"]` is not "embeddings".
         """

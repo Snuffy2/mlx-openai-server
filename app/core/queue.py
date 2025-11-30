@@ -49,7 +49,7 @@ class RequestQueue:
     ) -> None:
         """
         Create a RequestQueue that controls concurrent processing, per-request timeout, and queue capacity.
-        
+
         Parameters:
             max_concurrency (int): Maximum number of requests processed concurrently.
             timeout (float): Per-request timeout in seconds.
@@ -129,9 +129,9 @@ class RequestQueue:
     async def _worker_loop(self, processor: Callable[[Any], Awaitable[Any]]) -> None:
         """
         Continuously consumes queued RequestItem objects and schedules their processing with the provided processor.
-        
+
         Runs while the queue is active; each dequeued RequestItem is handed off as an independent task to be processed by `processor`. The loop stops when the queue is no longer running or when cancelled.
-        
+
         Parameters:
             processor (Callable[[Any], Awaitable[Any]]): Async callable that takes a queued item's `data` and produces the processing result; the result or any exception is delivered via the RequestItem's future.
         """
@@ -157,9 +157,9 @@ class RequestQueue:
     ) -> None:
         """
         Process a single queued RequestItem using the provided async processor.
-        
+
         Processes request.data with the given processor, enforces the queue's timeout, and records the result or exception on the request's future. On cancellation the request's future is ensured to receive the cancellation; the request is removed from active_requests and its payload is cleaned up. This function does not return a value.
-        
+
         Parameters:
             request (RequestItem[Any]): The queued request to process; its future will be completed with the processor's result or an exception.
             processor (Callable[[Any], Awaitable[Any]]): Async callable that accepts the request payload and produces the processing result.
@@ -210,14 +210,14 @@ class RequestQueue:
     async def enqueue(self, request_id: str, data: Any) -> RequestItem[Any]:
         """
         Enqueue a request and return its corresponding RequestItem.
-        
+
         Parameters:
             request_id (str): Unique identifier for the request.
             data (Any): Payload to be processed.
-        
+
         Returns:
             RequestItem[Any]: The created and queued request item.
-        
+
         Raises:
             RuntimeError: If the queue is not running.
             asyncio.QueueFull: If the queue is full or timed out while waiting for space.

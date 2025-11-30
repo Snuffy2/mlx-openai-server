@@ -43,10 +43,10 @@ from .config import MLXHubConfig, load_hub_config
 def create_app_with_config(config_path: str) -> FastAPI:
     """
     Create a FastAPI application configured using the hub configuration at the given path.
-    
+
     Parameters:
         config_path (str): Filesystem path to the hub configuration file.
-    
+
     Returns:
         FastAPI: A FastAPI application configured according to the specified hub configuration.
     """
@@ -77,11 +77,11 @@ class HubSupervisor:
     def __init__(self, hub_config: MLXHubConfig, registry: ModelRegistry | None = None) -> None:
         """
         Initialize the HubSupervisor and build in-memory model records from the hub configuration.
-        
+
         Parameters:
             hub_config (MLXHubConfig): Hub configuration object containing model definitions and defaults.
             registry (ModelRegistry | None): Optional model registry to track model handler state.
-        
+
         Behavior:
             - Creates internal structures: `_models` (map of model name to ModelRecord), `_lock` (asyncio.Lock), `_bg_tasks` (background task list), and `_shutdown` flag.
             - Iterates `hub_config.models` (if present) and constructs a ModelRecord for each model, copying group, is_default_model, model_path, and auto_unload_minutes from the model or using module defaults.
@@ -121,9 +121,9 @@ class HubSupervisor:
     async def start_model(self, name: str) -> dict[str, Any]:
         """
         Ensure the named model has a handler manager and load its handler immediately if JIT is disabled.
-        
+
         If the model has no manager, a LazyHandlerManager is created from the model's configuration (inheriting hub defaults where applicable). When JIT is disabled the manager will be loaded; when JIT is enabled the manager is created but not loaded. The function also updates the optional model registry with the manager when appropriate.
-        
+
         Returns:
             result (dict): An operation summary with keys:
                 - "status": one of
@@ -131,7 +131,7 @@ class HubSupervisor:
                     - `"loaded"`: manager was created and the model handler was loaded,
                     - `"started"`: manager was created but not loaded because JIT is enabled.
                 - "name": the model name provided.
-        
+
         Raises:
             HTTPException: 404 if the named model is not registered.
             RuntimeError: if a registry update is required but the model id to register is None.
@@ -331,7 +331,7 @@ class HubSupervisor:
     async def acquire_handler(self, name: str, reason: str = "request") -> MLXHandler | None:
         """
         Acquire and return the MLX handler for the named model, loading it if needed.
-        
+
         Returns:
             MLXHandler | None: The handler for the model if available; `None` if the model does not exist or no handler could be obtained.
         """
@@ -340,12 +340,12 @@ class HubSupervisor:
     async def load_model(self, name: str) -> dict[str, Any]:
         """
         Ensure an existing model's handler is loaded into memory and reflect the loaded state in the registry.
-        
+
         Attempts to load the model's handler via the model's manager; if loading succeeds, the registry is updated (if present) and a status dict is returned.
-        
+
         Returns:
             dict: `{"status": "loaded", "name": <model name>}` when the handler is loaded.
-        
+
         Raises:
             HTTPException: with status 404 if the model name is unknown.
             HTTPException: with status 500 if the model's manager has not been initialized.
@@ -377,12 +377,12 @@ class HubSupervisor:
     async def unload_model(self, name: str) -> dict[str, Any]:
         """
         Unload the handler for the named model and update supervisor state.
-        
+
         If the named model does not exist, raises an HTTPException with status 404. If a handler was present, it is unloaded, any per-model log sink is removed when available, the manager reference is cleared, and the model registry is updated when configured.
-        
+
         Returns:
             dict: `{'status': 'unloaded', 'name': name}` if the handler was unloaded; `{'status': 'not_loaded', 'name': name}` if the model had no handler.
-            
+
         Raises:
             HTTPException: If no model with the given name is registered (status 404).
         """
@@ -415,11 +415,11 @@ class HubSupervisor:
     async def reload_config(self) -> dict[str, Any]:
         """
         Reload the hub configuration and reconcile the in-memory model records.
-        
+
         Replaces the supervisor's loaded MLXHubConfig with the newly loaded configuration from the original source path,
         rebuilds the internal model records list while preserving existing ModelRecord instances and their manager/loaded
         state when model names remain unchanged, and detects duplicate model names in the new configuration.
-        
+
         Returns:
             dict[str, Any]: A dictionary with three lists:
                 - "started": model names present in the new config but not previously loaded,
@@ -494,9 +494,9 @@ class HubSupervisor:
     def get_status(self) -> dict[str, Any]:
         """
         Return a JSON-serializable snapshot of the supervisor's runtime state.
-        
+
         The snapshot contains a top-level `timestamp` (POSIX seconds) and a `models` list where each entry summarizes a model's runtime metadata and state.
-        
+
         Returns:
             snapshot (dict): {
                 "timestamp": float,
@@ -548,10 +548,10 @@ class HubSupervisor:
     def remove_background_task(self, task: asyncio.Task[None]) -> None:
         """
         Remove a background asyncio Task from the supervisor's tracking list.
-        
+
         Parameters:
             task (asyncio.Task[None]): The background task to stop tracking.
-        
+
         Raises:
             ValueError: If the task is not currently tracked.
         """
@@ -588,7 +588,7 @@ async def _schedule_default_model_starts(supervisor: HubSupervisor) -> None:
                 async def _autostart(cfg_model: Any) -> None:
                     """
                     Attempt to start the supervisor-managed handler for a default model.
-                    
+
                     Parameters:
                         cfg_model (Any): Model configuration object; its `name` attribute is used to identify which model to start. If `name` is missing, "<unknown>" is used.
                     """
@@ -612,9 +612,9 @@ async def _schedule_default_model_starts(supervisor: HubSupervisor) -> None:
                 ) -> None:
                     """
                     Run cleanup for a completed background autostart task.
-                    
+
                     Removes the finished task from the supervisor's tracking list and logs any exception raised by the task.
-                    
+
                     Parameters:
                         fut (asyncio.Task[None]): The completed background task to clean up.
                         model_name (str): Human-readable model name used in log messages; defaults to "<unknown>" when not available.
@@ -637,12 +637,12 @@ async def _schedule_default_model_starts(supervisor: HubSupervisor) -> None:
 def create_app(hub_config_path: str | None = None) -> FastAPI:
     """
     Create and configure the FastAPI application for the hub daemon.
-    
+
     Creates a FastAPI app wired to the hub configuration, logging, model registry, and a HubSupervisor exposed at app.state.supervisor (also available as app.state.hub_controller). The app includes health and hub control HTTP endpoints, Jinja templates for the status page, and lifecycle handling that performs port checks, schedules default-model auto-starts on startup, and shuts down supervised models and transient runtime state on shutdown.
-    
+
     Parameters:
         hub_config_path (str | None): Optional path to the hub YAML configuration. When None, the function will use the MLX_HUB_CONFIG_PATH environment variable or fall back to the module's default config resolution.
-    
+
     Returns:
         FastAPI: Configured FastAPI app instance with supervisor attached at app.state.supervisor.
     """
@@ -652,13 +652,13 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
         # Startup
         """
         Manage the FastAPI application lifespan for the hub daemon: perform startup checks, schedule auto-start of default models, yield to allow serving requests, then perform graceful shutdown and best-effort cleanup.
-        
+
         @returns:
             An async generator that yields once to allow the app to start and then resumes to run shutdown tasks.
-        
+
         @raises RuntimeError:
             If the configured port is already in use.
-        
+
         Notes:
             On shutdown, attempts to remove `hub_runtime.json` from the hub log path; removal failures are ignored.
         """
@@ -755,7 +755,7 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         """
         Provide a basic health check response.
-        
+
         Returns:
             A dict with key "status" set to "ok" indicating the service is healthy.
         """
@@ -765,9 +765,9 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def hub_status() -> dict[str, Any]:
         """
         Return a snapshot of the hub supervisor's status.
-        
+
         The snapshot contains a Unix timestamp and a list of models with their runtime state and metadata.
-        
+
         Returns:
             status (dict[str, Any]): Dictionary with keys:
                 - "timestamp" (float): time of the snapshot.
@@ -790,7 +790,7 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def hub_reload() -> dict[str, Any]:
         """
         Reload the hub configuration and reconcile in-memory model records with the new config.
-        
+
         Returns:
             result (dict[str, Any]): Mapping with keys:
                 - "started": list of model names that were added and scheduled/started,
@@ -803,7 +803,7 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def hub_shutdown() -> dict[str, Any]:
         """
         Request shutdown of all supervised models.
-        
+
         Returns:
             dict[str, Any]: Status information containing:
                 - "status": "ok" when the shutdown request was accepted.
@@ -823,7 +823,7 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def model_start(name: str, request: Request) -> dict[str, Any]:
         """
         Start the named model using the application's HubSupervisor.
-        
+
         Returns:
             dict: Result of the start operation (examples include {"status": "loaded"}, {"status": "started"}, or {"status": "already_loaded"}; may include the model "name").
         """
@@ -834,12 +834,12 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def model_stop(name: str, request: Request) -> dict[str, Any]:
         """
         Stop the specified model using the application's HubSupervisor.
-        
+
         Parameters:
-        	name (str): The model name/slug to stop.
-        
+                name (str): The model name/slug to stop.
+
         Returns:
-        	A dictionary describing the outcome of the stop operation, e.g. `{"status": "stopped"}`, `{"status": "not_running"}`, or other status details.
+                A dictionary describing the outcome of the stop operation, e.g. `{"status": "stopped"}`, `{"status": "not_running"}`, or other status details.
         """
         supervisor = cast("HubSupervisor", request.app.state.supervisor)
         return await supervisor.stop_model(name)
@@ -848,10 +848,10 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def model_load(name: str, request: Request) -> dict[str, Any]:
         """
         Load the named model through the application's HubSupervisor.
-        
+
         Parameters:
             name (str): The model's slug/name to load.
-        
+
         Returns:
             dict: Result dictionary describing the load outcome (for example, {"status": "loaded"}).
         """
@@ -862,11 +862,11 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def model_unload(name: str, request: Request) -> dict[str, Any]:
         """
         Handle an HTTP request to unload the named model from the hub supervisor.
-        
+
         Parameters:
             name (str): The model's name (slug) to unload.
             request (fastapi.Request): The incoming HTTP request; used to access the app's supervisor.
-        
+
         Returns:
             dict: Operation result. The `status` field indicates the outcome (for example, `'unloaded'` or `'not_loaded'`).
         """
@@ -877,9 +877,9 @@ def create_app(hub_config_path: str | None = None) -> FastAPI:
     async def hub_status_page(request: Request) -> HTMLResponse:
         """
         Render the hub status HTML page populated with the supervisor's status.
-        
+
         Pre-formats the status timestamp and model fields (casts memory_loaded to a boolean and ensures fallback values) and passes `hub_config`, the prepared `models` list, and the formatted timestamp to the Jinja template context.
-        
+
         Returns:
             HTMLResponse: rendered response for the "hub_status.html.jinja" template.
         """

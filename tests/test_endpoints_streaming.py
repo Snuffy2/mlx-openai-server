@@ -156,7 +156,7 @@ def test_handle_stream_response_edge_cases(
 ) -> None:
     """
     Run parameterized edge-case scenarios against the streaming response handler.
-    
+
     This test feeds a provided sequence of raw stream chunks into the streaming
     handler and asserts that the produced payloads satisfy the supplied
     expectations. The expectation dict may include:
@@ -166,7 +166,7 @@ def test_handle_stream_response_edge_cases(
       to match the usage object in the final payload.
     - "expect_error_substring" (str): substring expected to appear in an error
       payload's message.
-    
+
     Parameters:
         chunk_sequence (list[object]): Sequence of values yielded by the fake
             stream generator; values are interpreted as the raw streamed chunks.

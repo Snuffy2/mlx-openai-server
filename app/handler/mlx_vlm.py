@@ -62,7 +62,7 @@ class MLXVLMHandler:
     ) -> None:
         """
         Create and configure an MLXVLMHandler for the given model path.
-        
+
         Parameters:
             model_path (str): Filesystem path or identifier for the MLX vision-language model.
             context_length (int): Maximum token context length the model should use.
@@ -104,7 +104,7 @@ class MLXVLMHandler:
     async def get_models(self) -> list[dict[str, Any]]:
         """
         Return metadata for the available model(s) configured for this handler.
-        
+
         Returns:
             list[dict[str, Any]]: A list containing a single metadata dictionary with keys:
                 - `id`: model identifier (the configured model path)
@@ -185,13 +185,13 @@ class MLXVLMHandler:
     def _count_message_tokens(self, messages: list[dict[str, Any]], **kwargs: Any) -> int:
         """
         Estimate the number of prompt tokens for a list of chat messages.
-        
+
         This provides an approximate, text-only token count for multimodal prompts; token contributions from images, audio, or video are not reliably included and may be undercounted. The function uses the model processor's chat templating when available and falls back to a conservative text-only aggregation on error.
-        
+
         Parameters:
             messages (list[dict[str, Any]]): Chat messages to count tokens for.
             **kwargs: Passed through to the processor's apply_chat_template call when available.
-        
+
         Returns:
             int: Approximate number of prompt tokens (text-only for VLMs).
         """
@@ -244,13 +244,13 @@ class MLXVLMHandler:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream multimodal chat completion chunks, parse reasoning and tool-call content when applicable, and yield parsed pieces followed by a final usage summary.
-        
+
         Parameters:
             request (ChatCompletionRequest): Multimodal chat request; its `stream` flag will be set to True.
-        
+
         Returns:
             dict[str, Any]: Yields dictionaries representing either parsed response pieces (e.g., reasoning or tool-call outputs, or {"content": "<text>"}) or a final {"__usage__": UsageInfo(...)} entry with token counts.
-        
+
         Raises:
             HTTPException: Raised with status 429 when the service is at capacity; raised with status 500 on internal failures.
         """
@@ -366,12 +366,12 @@ class MLXVLMHandler:
     async def generate_multimodal_response(self, request: ChatCompletionRequest) -> dict[str, Any]:
         """
         Generate a completed multimodal chat response and token usage for the given request.
-        
+
         Given a prepared multimodal chat request, produce the model's full (non-streaming) response and a UsageInfo object describing token consumption. If parsers are configured for reasoning or tool calls, the returned `response` will be a dictionary with `reasoning_content` (possibly redacted), `tool_calls` (parsed tool invocations), and `content` (final assistant text); otherwise `response` will be the raw assistant string.
-        
+
         Parameters:
             request: ChatCompletionRequest containing the messages and any multimedia parts to include in the multimodal prompt.
-        
+
         Returns:
             dict[str, Any]: A dictionary with two keys:
                 - "response": either a raw response string or a dict with keys:
@@ -475,7 +475,7 @@ class MLXVLMHandler:
     async def cleanup(self) -> None:
         """
         Release handler resources and stop background processing before shutdown.
-        
+
         Stops the request queue if present, invokes cleanup on image, audio, and video processors when available, and forces garbage collection to free remaining resources.
         """
         logger.info("Cleaning up MLXVLMHandler resources")
@@ -510,12 +510,12 @@ class MLXVLMHandler:
     ) -> tuple[str | Generator[str, None, None], int]:
         """
         Process a multimodal request from the queue and return the model output and prompt token count.
-        
+
         Parameters:
             request_data (dict[str, Any]): Request dictionary containing at least the keys "messages" (chat messages) and "stream" (bool), plus other model parameters forwarded to the model call.
-        
+
         Returns:
-            tuple[str | Generator[str, None, None], int]: 
+            tuple[str | Generator[str, None, None], int]:
                 - First element: the model response — either a complete string (when stream is False) or a synchronous generator yielding response chunks (when stream is True).
                 - Second element: the number of prompt tokens consumed by the request.
         """
@@ -563,17 +563,17 @@ class MLXVLMHandler:
     ) -> dict[str, Any]:
         """
         Convert a ChatCompletionContentPart into a normalized dictionary describing its type and payload.
-        
+
         Parameters:
             content_part (ChatCompletionContentPart): A multimodal message part (image, video, audio, or text) to normalize.
-        
+
         Returns:
             dict[str, Any]: A dictionary with at least a `content_part` key whose value is a dict with a `type` field (`"image"`, `"video"`, or `"text"`).
                 - For images: `content_part` contains `"image"` with the local file path and the top-level dict also includes `"path"` with the same path.
                 - For videos: `content_part` contains `"video"` with the local file path and the top-level dict also includes `"path"`.
                 - For text: `content_part` contains `"text"` with the textual content.
                 - For unknown part types: `content_part` contains `"text"` with the string representation of the part.
-        
+
         Raises:
             HTTPException: Raises a 400 Bad Request when an audio input part is provided (audio is not supported).
         """
@@ -625,17 +625,17 @@ class MLXVLMHandler:
     async def _prepare_multimodal_request(self, request: ChatCompletionRequest) -> dict[str, Any]:
         """
         Normalize chat messages and collect local media paths and model parameters for a multimodal inference request.
-        
+
         Processes each incoming message to:
         - Preserve system, assistant, and tool messages as-is.
         - Convert user messages that are either plain text or lists of multimodal content parts into a normalized message list.
         - Reformat multimodal content parts into standardized content entries and collect local paths for images, audio, and video into separate lists.
         - Assemble chat_template_kwargs and model parameters (temperature, top_p, frequency_penalty, presence_penalty, max_tokens, stream) into the returned request dictionary.
         Raises an HTTPException with status 400 for invalid message content or when media processing fails.
-        
+
         Parameters:
             request (ChatCompletionRequest): Incoming client request containing messages, tools, tool_choice, and model parameters.
-        
+
         Returns:
             dict[str, Any]: A dictionary containing:
                 - messages: List[dict] of normalized chat message objects ready for the model.
@@ -736,10 +736,10 @@ class MLXVLMHandler:
     def _validate_image_url(self, url: str) -> None:
         """
         Validate that an image URL is non-empty and, if it is a data URL, that it encodes a valid base64 image.
-        
+
         Parameters:
             url (str): The image URL or data URL to validate. Data URLs must start with "data:image/".
-        
+
         Raises:
             HTTPException: If `url` is empty or a data URL is not a valid base64-encoded image (HTTP 400).
         """
@@ -769,10 +769,10 @@ class MLXVLMHandler:
     def _validate_audio_data(self, url: str) -> None:
         """
         Validate an audio data URL and ensure it is present and, if a data URL, correctly formatted base64 audio.
-        
+
         Parameters:
             url (str): Audio data URL to validate; may be a normal URL or a data URL starting with `data:audio/...`.
-        
+
         Raises:
             HTTPException: With status 400 if `url` is empty or if a `data:` URL is not a valid `data:audio/...` header or contains invalid base64 data.
         """

@@ -30,9 +30,9 @@ from .version import __version__
 def print_startup_banner(config_args: MLXServerConfig) -> None:
     """
     Emit a concise, user-facing startup banner that summarizes the server runtime configuration.
-    
+
     Logs selected settings such as model path and type, context length, host and port, concurrency and queue parameters, JIT and auto-unload status, image/LoRA-specific options, auto-resize and tool/parser choices for applicable model types, and logging destination/level.
-    
+
     Parameters:
         config_args (MLXServerConfig): Configuration whose runtime options are displayed in the banner.
     """

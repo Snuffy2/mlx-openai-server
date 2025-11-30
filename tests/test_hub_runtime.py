@@ -21,7 +21,7 @@ from app.hub.daemon import create_app
 def test_hub_runtime_state_written_and_read(tmp_path: Path) -> None:
     """
     Verify that writing the hub runtime state creates the runtime file and that it can be read back with the correct `pid` and `host`.
-    
+
     Uses the current process PID so liveness checks in `_read_hub_runtime_state` succeed.
     """
     # Configure a hub config that writes logs into the temporary directory
@@ -42,10 +42,10 @@ def test_hub_runtime_state_written_and_read(tmp_path: Path) -> None:
 def _write_hub_yaml(path: Path) -> Path:
     """
     Create a minimal hub.yaml file in the given directory and return its path.
-    
+
     Parameters:
         path (Path): Directory where `hub.yaml` will be created. The file will contain a mapping with `log_path` set to this directory and a single model entry.
-    
+
     Returns:
         Path: Path to the created `hub.yaml` file.
     """

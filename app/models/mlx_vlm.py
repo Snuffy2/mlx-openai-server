@@ -45,12 +45,12 @@ class MLX_VLM:
     ) -> None:
         """
         Load and initialize the MLX multimodal vision-language model and its processor.
-        
+
         Parameters:
             model_path (str): Filesystem path to the model directory or archive containing model weights and configuration.
             context_length (int): Maximum key-value cache / context length to use for generation; sets the instance's max_kv_size.
             trust_remote_code (bool): If true, allow execution of remote model code when loading models.
-        
+
         Raises:
             ValueError: If the model or processor cannot be loaded.
         """
@@ -96,14 +96,14 @@ class MLX_VLM:
     ) -> tuple[str | Generator[str, None, None], int]:
         """
         Generate a text response from OpenAI-style chat messages and optional multimodal inputs.
-        
+
         Processes any images or videos referenced in `messages`, prepares model inputs, and invokes either streaming or non-streaming generation.
-        
+
         Parameters:
             messages (list[dict[str, Any]]): OpenAI-style message dictionaries; may include multimodal content (image/video references).
             stream (bool): If True, return a generator that yields response chunks; if False, return the full response string.
             **kwargs: Additional model/generation options (for example, `chat_template_kwargs`, `temperature`, `max_tokens`, etc.).
-        
+
         Returns:
             tuple[str | Generator[str, None, None], int]: A tuple (response, prompt_tokens) where `response` is the full generated string when `stream=False` or a generator yielding string chunks when `stream=True`, and `prompt_tokens` is the number of tokens in the prompt.
         """

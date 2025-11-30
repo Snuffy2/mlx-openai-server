@@ -52,9 +52,9 @@ class MLXFluxHandler:
     ) -> None:
         """
         Create and configure an MLXFluxHandler for the given model and runtime options.
-        
+
         Loads the specified FluxModel, records the model creation time, and initializes the request queue used for concurrent image generation requests.
-        
+
         Parameters:
             model_path: Path, model name, or Hugging Face repository ID identifying the model to load.
             max_concurrency: Maximum number of concurrent model inference tasks allowed by the internal request queue.
@@ -93,7 +93,7 @@ class MLXFluxHandler:
     async def get_models(self) -> list[dict[str, Any]]:
         """
         List available model entries describing the loaded model.
-        
+
         Returns:
             list[dict[str, Any]]: A list of dictionaries containing model metadata with keys:
                 - `id`: model path or identifier
@@ -113,12 +113,12 @@ class MLXFluxHandler:
     async def initialize(self, queue_config: dict[str, Any] | None = None) -> None:
         """
         Set up or reconfigure the request queue and start its worker.
-        
+
         If queue_config is omitted, the current request queue defaults are used. Accepted keys in queue_config:
         - "max_concurrency": maximum number of concurrent worker tasks.
         - "timeout": per-request timeout in seconds.
         - "queue_size": maximum number of queued requests.
-        
+
         Parameters:
             queue_config (dict[str, Any] | None): Optional configuration for the request queue.
         """
@@ -145,12 +145,12 @@ class MLXFluxHandler:
     async def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
         """
         Generate an image from the provided generation parameters.
-        
+
         Submits the request to the internal processing queue and returns a response containing the generated image encoded as a base64 PNG.
-        
+
         Parameters:
             request (ImageGenerationRequest): Object with generation fields (prompt, negative_prompt, steps, seed, guidance_scale, size). If `size` is omitted, a default of 1024x1024 is used.
-        
+
         Returns:
             ImageGenerationResponse: Response with a `created` timestamp and a `data` list containing an ImageData entry whose `b64_json` field holds the base64-encoded PNG.
         """
@@ -210,13 +210,13 @@ class MLXFluxHandler:
     async def edit_image(self, image_edit_request: ImageEditRequest) -> ImageEditResponse:
         """
         Edit the provided image according to the parameters in the ImageEditRequest and return the edited image data.
-        
+
         Parameters:
             image_edit_request (ImageEditRequest): Request containing the input image file, prompt, and optional edit parameters (size, steps, seed, negative_prompt, guidance_scale).
-        
+
         Returns:
             ImageEditResponse: Response containing the edited image as a base64-encoded PNG in data[0].b64_json and a creation timestamp.
-        
+
         Raises:
             HTTPException: For validation errors (invalid file type, empty/corrupted image, oversized file, empty prompt), when the request queue is at capacity, or on internal processing failures.
         """
@@ -389,7 +389,7 @@ class MLXFluxHandler:
     async def _process_request(self, request_data: dict[str, Any]) -> Image.Image:
         """
         Process a single image generation or edit request from the queue and return the produced PIL Image.
-        
+
         Parameters:
             request_data (dict): Request parameters. Expected keys:
                 - prompt (str): Text prompt for generation.
@@ -400,7 +400,7 @@ class MLXFluxHandler:
                 - height (int): Output image height in pixels.
                 - image_path (str | None): Path to an input image for editing.
                 - guidance_scale (float): Guidance/conditioning strength.
-        
+
         Returns:
             Image.Image: The generated or edited PIL Image.
         """

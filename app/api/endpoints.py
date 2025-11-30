@@ -183,9 +183,9 @@ async def _get_handler_or_error(
 def _hub_model_required_error() -> JSONResponse:
     """
     Return a 400 JSONResponse indicating a model selection is required when the server runs in hub mode.
-    
+
     The response payload is an OpenAI-style error explaining that the 'model' field (or query parameter) must be provided and suggests calling /v1/models to list available names.
-    
+
     Returns:
         JSONResponse: A response containing the error payload with HTTP status code 400.
     """
@@ -209,12 +209,12 @@ def _resolve_model_for_openai_api(
 ) -> tuple[str | None, str | None, JSONResponse | None]:
     """
     Resolve which internal hub handler and external model identifier should be used for an OpenAI-style request.
-    
+
     Parameters:
         raw_request (Request): FastAPI request object used to access app state (hub controller and config).
         model_name (str | None): The OpenAI-style model identifier provided by the client (may be None).
         provided_explicitly (bool): Whether the client explicitly included a `model` field in the request payload.
-    
+
     Returns:
         tuple[api_model_id, handler_name, error_response]:
             api_model_id (str | None): The model identifier to expose through the OpenAI-compatible API (typically the registry `model_path`), or None if resolution failed.
@@ -281,10 +281,10 @@ def _resolve_model_for_openai_api(
 def _model_field_was_provided(payload: Any) -> bool:
     """
     Detect whether the payload explicitly included a "model" field.
-    
+
     Parameters:
         payload (Any): The request payload (typically a Pydantic model) to inspect.
-    
+
     Returns:
         bool: `True` if the payload's field-set indicates "model" was provided, `False` otherwise.
     """
@@ -305,10 +305,10 @@ def _model_field_was_provided(payload: Any) -> bool:
 async def health(raw_request: Request) -> HealthCheckResponse | JSONResponse:
     """
     Return current service health and model status based on app state (handler manager, hub controller, or direct handler).
-    
+
     Parameters:
         raw_request (Request): Incoming FastAPI request used to inspect application state (handler_manager, hub_controller, or handler) and to determine the configured model id.
-    
+
     Returns:
         HealthCheckResponse: When the service can report status, contains `status` (OK), `model_id`, and `model_status` ("initialized", "unloaded", or "controller").
         JSONResponse: When no handler is initialized, returns a 503 response with content {"status": "unhealthy", "model_id": None, "model_status": "uninitialized"}.
@@ -359,12 +359,12 @@ async def health(raw_request: Request) -> HealthCheckResponse | JSONResponse:
 async def models(raw_request: Request) -> ModelsResponse | JSONResponse:
     """
     Return the list of models currently available to the server.
-    
+
     The response is resolved from the highest-priority source available: the model registry (filtered to running hub models when applicable), a cached metadata snapshot, or the active handler as a backward-compatible fallback. On failure returns a JSONResponse containing an OpenAI-style error.
-    
+
     Parameters:
         raw_request (Request): The incoming FastAPI request; used to access app state (registry, supervisor, cache, handlers).
-    
+
     Returns:
         ModelsResponse or JSONResponse: A ModelsResponse with object="list" and model entries when successful, or a JSONResponse with an error payload on failure.
     """
@@ -453,13 +453,13 @@ async def queue_stats(
 ) -> dict[str, Any] | JSONResponse:
     """
     Return queue statistics for the service or a specific model.
-    
+
     Resolves the OpenAI-style model identifier to an internal handler (respecting hub mode rules) and queries that handler for queue statistics. The shape and keys of `queue_stats` depend on the handler implementation (e.g., Flux vs LM/VLM/Whisper). If hub mode requires an explicit model or the handler cannot be loaded, a JSONResponse with an appropriate error is returned.
-    
+
     Parameters:
         raw_request (Request): Incoming FastAPI request used to resolve hub/handler context.
         model (str | None): Optional API model identifier to filter statistics; may be required when the server is running in hub mode.
-    
+
     Returns:
         dict: A dictionary with "status": "ok" and "queue_stats" containing handler-dependent statistics, or a JSONResponse containing an error description.
     """
@@ -514,13 +514,13 @@ async def chat_completions(
 ) -> ChatCompletionResponse | StreamingResponse | JSONResponse:
     """
     Handle an OpenAI-style chat completion request and return either a final response, a streaming response, or an error response.
-    
+
     Resolves the requested model to an internal handler, validates that the handler supports chat (text or multimodal), and delegates to the appropriate processing routine which yields either a ChatCompletionResponse or a StreamingResponse. On failure returns a JSONResponse containing an OpenAI-compatible error.
-    
+
     Parameters:
         request (ChatCompletionRequest): The OpenAI-style chat completion payload; may include an explicit `model` field.
         raw_request (Request): The incoming FastAPI request (used for routing context and optional request_id).
-    
+
     Returns:
         ChatCompletionResponse | StreamingResponse | JSONResponse: A completed chat response, a streaming SSE response for streamed requests, or a JSONResponse containing an error description.
     """
@@ -583,11 +583,11 @@ async def embeddings(
 ) -> EmbeddingResponse | JSONResponse:
     """
     Handle an OpenAI-style embeddings request by resolving the target model, invoking the embeddings handler, and returning the embeddings or an error response.
-    
+
     Parameters:
         request (EmbeddingRequest): OpenAI-compatible embeddings payload; the `model` field may be remapped to an internal API model id.
         raw_request (Request): The incoming FastAPI request used for routing and handler resolution.
-    
+
     Returns:
         EmbeddingResponse: Embeddings formatted according to `request.encoding_format`.
         JSONResponse: OpenAI-compatible error response when model resolution, handler selection, or processing fails.
@@ -651,13 +651,13 @@ async def image_generations(
 ) -> ImageGenerationResponse | JSONResponse:
     """
     Process an OpenAI-style image generation request, resolve the target model, and delegate to an image-generation-capable handler.
-    
+
     Resolves OpenAI-style model identifiers to an internal handler (honoring hub mode), ensures the resolved handler supports image generation, and invokes the handler to produce an ImageGenerationResponse. Returns a JSONResponse containing a standardized error when model resolution fails, no handler is available, the selected handler is not an image-generation type, or an internal error occurs.
-    
+
     Parameters:
         request (ImageGenerationRequest): The image generation request payload; `model` may be rewritten to the resolved API-visible model id.
         raw_request (Request): The incoming FastAPI request used for hub/handler resolution.
-    
+
     Returns:
         ImageGenerationResponse or JSONResponse: The successful image generation result, or a JSONResponse containing an OpenAI-compatible error payload.
     """
@@ -718,15 +718,15 @@ async def create_image_edit(
 ) -> ImageEditResponse | JSONResponse:
     """
     Handle an image edit request, routing to a per-model handler and returning the edited image or an error response.
-    
+
     Parameters:
         request (ImageEditRequest): The OpenAI-style image edit payload (may include an explicit `model` field).
         raw_request (Request): The incoming FastAPI request used to resolve hub/handler context.
-    
+
     Returns:
         ImageEditResponse: Successful image edit result.
         JSONResponse: Error response when model resolution, handler availability, handler type, or processing fails.
-    
+
     Notes:
         - Re-raises HTTPException produced by handlers.
         - Returns 400 if the selected handler does not support image generation, 503 if no handler is initialized, and 500 for unexpected processing errors.
@@ -787,13 +787,13 @@ async def create_audio_transcriptions(
 ) -> StreamingResponse | TranscriptionResponse | JSONResponse | str:
     """
     Handle an audio transcription request using the configured Whisper handler.
-    
+
     When a hub model mapping is present, the request's model field may be replaced with the resolved API model id. If the request requests streaming, returns a Server-Sent Events (SSE) stream; otherwise returns the final transcription.
-    
+
     Parameters:
         request (TranscriptionRequest): The transcription request payload; may be modified with a resolved API model id.
         raw_request (Request): The incoming FastAPI request (used for routing and handler resolution).
-    
+
     Returns:
         StreamingResponse: An SSE stream of transcription events when `request.stream` is true.
         TranscriptionResponse or str: The completed transcription result when not streaming.
@@ -869,14 +869,14 @@ def create_response_embeddings(
 ) -> EmbeddingResponse:
     """
     Create an OpenAI-style EmbeddingResponse from a list of embedding vectors.
-    
+
     When `encoding_format` is "base64", each embedding is serialized as float32 bytes and base64-encoded; when "float", embeddings are returned as lists of floats.
-    
+
     Parameters:
         embeddings (list[list[float]]): Embedding vectors to include in the response.
         model (str): Model identifier to set on the response.
         encoding_format (Literal["float", "base64"], optional): Encoding for each embedding; defaults to "float".
-    
+
     Returns:
         EmbeddingResponse: Response with `object="list"`, `data` containing EmbeddingResponseData entries, and `model` set to the provided model.
     """
@@ -910,12 +910,12 @@ def create_response_chunk(
 ) -> ChatCompletionChunk:
     """
     Builds a ChatCompletionChunk for OpenAI-compatible streaming from a text, reasoning, or tool-call chunk.
-    
+
     The function accepts either a string or a dict-shaped chunk and produces a ChatCompletionChunk whose delta encodes one of:
     - text content,
     - reasoning content (optionally with content),
     - a tool/function call (with `name` and/or `arguments`).
-    
+
     Parameters:
         chunk (str | dict[str, Any]): The incoming chunk to format. If a string, it is treated as assistant content. If a dict, expected keys include `content`, `reasoning_content`, `name`, `arguments`, and optional `index`.
         model (str): Model identifier to include in the chunk.
@@ -926,7 +926,7 @@ def create_response_chunk(
         created_time (int | None, optional): Unix timestamp to set as the chunk's `created`. If omitted, the current time is used.
         request_id (str | None, optional): Optional request identifier to propagate into the chunk.
         tool_call_id (str | None, optional): Identifier to use for tool/function call chunks; if omitted a new tool-call id is generated when needed.
-    
+
     Returns:
         ChatCompletionChunk: A prepared chat completion chunk whose delta contains the appropriate fields for streaming (content, reasoning_content, or tool call) and whose finish_reason is set when `is_final` is True.
     """
@@ -1031,12 +1031,12 @@ def create_response_chunk(
 def _yield_sse_chunk(data: dict[str, Any] | ChatCompletionChunk) -> str:
     """
     Format a value as a Server-Sent Event (SSE) data string.
-    
+
     If `data` is a ChatCompletionChunk it will be converted via its `model_dump()` method; otherwise the value is JSON-serialized directly. The result is prefixed with "data: " and terminated with a double newline to form a single SSE event.
-    
+
     Parameters:
         data (dict[str, Any] | ChatCompletionChunk): Payload to encode as the SSE event data.
-    
+
     Returns:
         str: SSE-formatted string like `data: <json>\n\n`.
     """
@@ -1052,16 +1052,16 @@ async def handle_stream_response(
 ) -> AsyncGenerator[str, None]:
     """
     Stream OpenAI-compatible Server-Sent Events (SSE) from an async chunk generator.
-    
+
     This function consumes an async generator that yields streaming response pieces (strings or dicts), formats them into OpenAI-compatible chat completion SSE chunks, and yields the serialized SSE payloads. It emits an initial role-only assistant delta, intermediate content/tool-call/usage chunks, a final chunk that includes the finish reason and any collected usage, and the explicit "[DONE]" sentinel. On exceptions it yields an error chunk before the finalization.
-    
+
     Parameters:
         generator (AsyncGenerator[Any, None]): Async generator that yields streaming pieces. Accepted chunk shapes:
             - str: content delta to append to the assistant message.
             - dict: structured chunk that may contain tool call fields (`name`, `arguments`, optional `index`) or a special `__usage__` key to supply usage metadata.
         model (str): Model identifier to include in emitted chunks.
         request_id (str | None): Optional request identifier to include in emitted chunks.
-    
+
     Returns:
         AsyncGenerator[str, None]: SSE-formatted strings representing serialized ChatCompletion chunks and the final "data: [DONE]" sentinel.
     """
@@ -1195,14 +1195,14 @@ async def process_multimodal_request(
 ) -> ChatCompletionResponse | StreamingResponse | JSONResponse:
     """
     Handle a multimodal chat completion request and return either a streamed SSE response or a final chat completion response.
-    
+
     If the request requests streaming, produce a Server-Sent Events streaming response; otherwise obtain the handler's multimodal result and format it into an OpenAI-compatible chat completion response. When the handler returns a dict containing "response" and "usage", the usage is applied to the formatted response.
-    
+
     Parameters:
         handler (MLXVLMHandler): Multimodal handler used to generate the response.
         request (ChatCompletionRequest): OpenAI-style chat completion request payload.
         request_id (str | None): Optional request identifier for tracing/logging.
-    
+
     Returns:
         ChatCompletionResponse or StreamingResponse or JSONResponse: A finalized chat completion response, a streaming SSE response, or an error JSON response.
     """
@@ -1241,12 +1241,12 @@ async def process_text_request(
 ) -> ChatCompletionResponse | StreamingResponse | JSONResponse:
     """
     Handle a text-only chat completion request, returning either a streamed SSE response or a completed chat response.
-    
+
     Parameters:
         handler (MLXLMHandler | MLXVLMHandler): Model handler capable of producing text responses or text streams.
         request (ChatCompletionRequest): OpenAI-style chat completion request; its `stream` field controls streaming vs final response.
         request_id (str | None): Optional request identifier for logging and correlation.
-    
+
     Returns:
         ChatCompletionResponse if the request is non-streaming; StreamingResponse (text/event-stream) that yields SSE-formatted chunks if `request.stream` is true; JSONResponse on error.
     """
@@ -1278,7 +1278,7 @@ async def process_text_request(
 def get_id() -> str:
     """
     Create a unique chat completion identifier.
-    
+
     Returns:
         str: Identifier in the format "chatcmpl_<unix_timestamp><6-digit_random>", e.g. "chatcmpl_1700000000123456".
     """
@@ -1290,10 +1290,10 @@ def get_id() -> str:
 def get_tool_call_id() -> str:
     """
     Create a unique identifier for a tool call.
-    
+
     The ID uses the current Unix timestamp and a six-digit random suffix, formatted as:
     `call_<timestamp><6-digit-random>`.
-    
+
     Returns:
         Identifier string for the tool call.
     """
@@ -1310,20 +1310,20 @@ def format_final_response(
 ) -> ChatCompletionResponse:
     """
     Builds an OpenAI-compatible ChatCompletionResponse from a final model response.
-    
+
     If `response` is a string, the result contains a single assistant message with that text and a finish reason of "stop". If `response` is a dict it may include the keys:
     - "content": assistant message content,
     - "reasoning_content": optional auxiliary reasoning text,
     - "tool_calls": optional list of tool call objects.
-    
+
     Each entry in "tool_calls" is converted into a ChatCompletionMessageToolCall with a generated tool-call id; its "arguments" field is used as-is if already a string, otherwise it is serialized to JSON. When tool calls are present the response's finish reason is "tool_calls"; otherwise it is "stop".
-    
+
     Parameters:
         response (str | dict[str, Any]): Final model response (string or structured dict).
         model (str): Model identifier to include in the response.
         request_id (str | None): Optional request id to attach to the response.
         usage (UsageInfo | None): Optional usage information to attach to the response.
-    
+
     Returns:
         ChatCompletionResponse: Formatted chat completion response matching OpenAI-style schema.
     """

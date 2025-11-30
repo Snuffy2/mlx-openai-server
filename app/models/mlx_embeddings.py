@@ -58,11 +58,11 @@ class MLX_Embeddings:
     def _get_embeddings(self, texts: list[str], max_length: int = 512) -> mx.array:
         """
         Produce dense embeddings for a list of texts.
-        
+
         Parameters:
             texts (list[str]): Input strings to embed.
             max_length (int): Maximum sequence length in tokens; inputs longer than this are truncated.
-        
+
         Returns:
             mx.array: Array of shape (len(texts), D) where D is the model's embedding dimension containing the embeddings for each input in order.
         """
@@ -94,9 +94,9 @@ class MLX_Embeddings:
     def _cleanup_arrays(self, *arrays: MutableMapping[str, ArrayLike] | ArrayLike | None) -> None:
         """
         Remove MLX array objects from provided mappings or direct containers to free memory.
-        
+
         For each non-None argument, if it is a mapping this function deletes any entries whose values expose an `nbytes` attribute; if it is a direct array-like value it will be ignored (only mappings are pruned). The function catches KeyError, AttributeError, and TypeError raised during cleanup and logs a warning without re-raising.
-        
+
         Parameters:
             *arrays (MutableMapping[str, ArrayLike] | ArrayLike | None): One or more mappings, array-like objects, or None. Mappings are inspected and entries whose values have an `nbytes` attribute are removed to help release underlying MLX memory.
         """
@@ -115,11 +115,11 @@ class MLX_Embeddings:
     def __call__(self, texts: list[str], max_length: int = 512) -> list[list[float]]:
         """
         Compute fixed-size embedding vectors for each input text.
-        
+
         Parameters:
             texts (list[str]): Input texts to embed; each element produces one embedding.
             max_length (int): Maximum sequence length used during tokenization (defaults to 512).
-        
+
         Returns:
             list[list[float]]: A list of embedding vectors (lists of floats); the i-th vector corresponds to texts[i].
         """

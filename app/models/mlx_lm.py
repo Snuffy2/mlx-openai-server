@@ -50,17 +50,17 @@ class MLX_LM:
     ) -> None:
         """
         Initialize the MLX_LM wrapper by loading the model and tokenizer from the given path.
-        
+
         Loads the model and tokenizer, sets tokenizer-related attributes (pad_token_id, bos_token),
         records the model type and context length, and creates an OutlinesTransformerTokenizer
         wrapper for outline-aware generation. During model download/load, stdout and stderr are
         temporarily redirected to suppress low-level progress output that can raise BrokenPipeError.
-        
+
         Parameters:
             model_path (str): Filesystem path or remote identifier for the model to load.
             context_length (int): Maximum key-value cache / context length to use for generation.
             trust_remote_code (bool): Whether to allow model/tokenizer code from remote sources.
-        
+
         Raises:
             ValueError: If the model or tokenizer cannot be loaded.
         """
@@ -105,10 +105,10 @@ class MLX_LM:
     def _apply_l2_normalization(self, embeddings: mx.array) -> mx.array:
         """
         Normalize each embedding vector to have L2 norm equal to 1.
-        
+
         Parameters:
             embeddings (mx.array): 2-D array of shape (N, D) containing N embedding vectors of dimension D.
-        
+
         Returns:
             mx.array: Array of the same shape as `embeddings` where each row has been divided by its L2 norm (a small epsilon is added to norms to avoid division by zero).
         """
@@ -122,11 +122,11 @@ class MLX_LM:
     ) -> list[list[int]]:
         """
         Tokenize prompts in batches and pad each sequence to the batch maximum length for model-ready input.
-        
+
         Parameters:
             prompts: List of prompt strings to tokenize.
             batch_size: Number of prompts to process per batch; controls memory vs throughput.
-        
+
         Returns:
             A list of token id sequences where each sequence is padded with a safe pad token id to match its batch's maximum length.
         """
@@ -165,7 +165,7 @@ class MLX_LM:
     def get_model_type(self) -> str:
         """
         Get the model type identifier.
-        
+
         Returns:
             The model type as a string.
         """
@@ -237,7 +237,7 @@ class MLX_LM:
     ) -> tuple[str | Generator[Any, None, None], int]:
         """
         Generate a model response for a chat conversation.
-        
+
         Parameters:
             messages (list[dict[str, str]]): Conversation messages. Each message should be a mapping with string fields such as "role" and "content".
             stream (bool): If True, return a generator that yields streamed generation chunks; if False, return the full generated string.
@@ -252,7 +252,7 @@ class MLX_LM:
                 - repetition_penalty (float): Penalty applied to repeated tokens.
                 - repetition_context_size (int): Context window size for repetition handling.
                 - schema (Any): Optional JSON schema used to constrain generation via an outlines logits processor.
-        
+
         Returns:
             tuple[str | Generator[Any, None, None], int]: A pair where the first element is either the generated text (when stream is False)
             or a generator yielding streamed chunks (when stream is True), and the second element is the prompt length in tokens.

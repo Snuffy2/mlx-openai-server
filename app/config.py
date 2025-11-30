@@ -84,12 +84,12 @@ class MLXServerConfig:
     def __post_init__(self) -> None:
         """
         Normalize and validate configuration fields after dataclass initialization.
-        
+
         Parses comma-separated `lora_paths_str` and `lora_scales_str` into `lora_paths` and
         `lora_scales`, applies model-type defaults and consistency checks for `config_name`,
         validates `auto_unload_minutes` requirements, normalizes `log_level` to uppercase,
         and trims `name` and `group`, converting empty values to `None`.
-        
+
         Raises:
             ValueError: If `auto_unload_minutes` is set while `jit_enabled` is False, or if
                 `auto_unload_minutes` is less than or equal to zero.
@@ -152,7 +152,7 @@ class MLXServerConfig:
     def model_identifier(self) -> str:
         """
         Provide the model identifier for this configuration.
-        
+
         Returns:
             str: The model identifier, currently equal to the configured `model_path`.
         """

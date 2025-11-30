@@ -21,7 +21,7 @@ class _StubSupervisor:
     def __init__(self) -> None:
         """
         Initialize the stub supervisor's in-memory state.
-        
+
         Sets `shutdown_called` to False and creates `started` as an empty mapping from model name (str) to mock PID (int).
         """
         self.shutdown_called = False
@@ -30,9 +30,9 @@ class _StubSupervisor:
     def get_status(self) -> dict[str, Any]:
         """
         Provide a fixed supervisor status payload for tests.
-        
+
         The returned payload contains a numeric `timestamp` and a `models` list with the current model entries.
-        
+
         Returns:
             dict[str, Any]: A status payload with keys:
                 - "timestamp" (int): A monotonic timestamp value.
@@ -45,10 +45,10 @@ class _StubSupervisor:
     async def start_model(self, name: str) -> dict[str, Any]:
         """
         Record that a model was started and return its start payload.
-        
+
         Parameters:
             name (str): The model's name.
-        
+
         Returns:
             dict: Payload with keys "status" (the string "started"), "name" (the model name), and "pid" (a mock process id).
         """
@@ -58,10 +58,10 @@ class _StubSupervisor:
     async def stop_model(self, name: str) -> dict[str, Any]:
         """
         Stop tracking the given model and return a stopped-status payload.
-        
+
         Parameters:
             name (str): Name of the model to stop.
-        
+
         Returns:
             dict[str, Any]: A payload containing "status": "stopped" and "name": the stopped model name.
         """
@@ -71,10 +71,10 @@ class _StubSupervisor:
     async def load_model(self, name: str) -> dict[str, Any]:
         """
         Record that the model's memory was loaded and report the action.
-        
+
         Parameters:
             name (str): The model identifier.
-        
+
         Returns:
             dict: A payload with keys:
                 - "status": the string "memory_loaded".
@@ -85,10 +85,10 @@ class _StubSupervisor:
     async def unload_model(self, name: str) -> dict[str, Any]:
         """
         Mark the specified model's in-memory resources as unloaded and report the outcome.
-        
+
         Parameters:
             name (str): The model identifier whose memory was unloaded.
-        
+
         Returns:
             result (dict[str, Any]): A payload containing `status` set to `"memory_unloaded"` and `name` equal to the provided model identifier.
         """
@@ -97,9 +97,9 @@ class _StubSupervisor:
     async def reload_config(self) -> dict[str, Any]:
         """
         Return a summary of models affected by reloading the hub configuration.
-        
+
         Updates the supervisor's configuration and reports which models were started, stopped, or unchanged as a result.
-        
+
         Returns:
             dict[str, list[str]]: Mapping with keys:
                 - "started": list of model names that were started.
@@ -112,7 +112,7 @@ class _StubSupervisor:
         # mark called so tests can assert the background task ran
         """
         Record that a shutdown was requested for the stub supervisor.
-        
+
         Sets `self.shutdown_called` to True so tests can verify that the shutdown background task was scheduled or executed.
         """
         self.shutdown_called = True

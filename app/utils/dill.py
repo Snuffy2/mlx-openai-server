@@ -126,7 +126,7 @@ class Pickler(dill.Pickler):
     def memoize(self, obj: Any) -> None:
         """
         Add the given object to the pickler's memo table, except strings which are not memoized.
-        
+
         Parameters:
             obj (Any): The object to memoize; string objects are deliberately skipped to avoid identity-based issues.
         """

@@ -32,15 +32,15 @@ def hub_service_app(
 ) -> tuple[TestClient, Any, Any]:
     """
     Provide a TestClient configured with a stubbed hub service backend for testing hub endpoints.
-    
+
     Sets up a FastAPI app with hub routes, writes a temporary hub.yaml configuration, attaches the provided stub controller and stub service state to app.state, and monkeypatches daemon interactions and process start/stop helpers so tests can simulate service availability, reloads, model start/stop, and shutdown. Yields a tuple of the test client, the stub service state, and the stub controller; ensures the client is closed on teardown.
-    
+
     Parameters:
         tmp_path (Path): Temporary filesystem path for writing the hub configuration and logs.
         monkeypatch (pytest.MonkeyPatch): Pytest fixture used to patch daemon and process functions.
         stub_service_state (_StubServiceState): Mutable stub representing daemon state, call counts, and simulated responses.
         stub_controller (_StubController): Stub controller used to observe controller interactions (reloads, start/stop, loads).
-    
+
     Returns:
         tuple[TestClient, Any, Any]: A TestClient for the configured FastAPI app, the stub service state, and the stub controller.
     """
@@ -93,7 +93,7 @@ models:
         # Emulate the daemon HTTP surface used by the routes.
         """
         Emulate the daemon HTTP API used by the hub routes for testing.
-        
+
         Simulates responses and side effects for a small set of endpoints:
         - GET /health: returns {"status": "ok"} when the stubbed service is available.
         - POST /hub/reload: increments state.reload_calls and returns state.reload_result when available.
@@ -102,17 +102,17 @@ models:
         - POST /hub/models/{name}/stop: records the stop attempt in state.stop_calls and returns {"message": "stopped"}.
         - POST /hub/shutdown: marks state.shutdown_called and returns {"message": "shutdown"}.
         For any other method/path combination this stub raises a HubServiceError.
-        
+
         Parameters:
             config (Any): Ignored; present to match the real daemon call signature.
             method (str): HTTP method of the simulated request (e.g., "GET", "POST").
             path (str): Request path to simulate.
             json (Any | None): Ignored payload, accepted for signature compatibility.
             timeout (float): Ignored timeout, accepted for signature compatibility.
-        
+
         Returns:
             dict[str, Any]: The simulated JSON response for the requested endpoint.
-        
+
         Raises:
             HubServiceError: When the stubbed service is marked unavailable, when an unhandled path/method is requested, or to simulate a capacity error (status code 429) for starting the "saturated" model.
         """
@@ -155,12 +155,12 @@ models:
     def _fake_start_process(path: str, *, host: str | None = None, port: int | None = None) -> int:  # noqa: ARG001
         """
         Replaceable test helper that simulates starting the hub service process by marking the service available.
-        
+
         Parameters:
             path (str): Path to the hub executable (accepted but not used by the stub).
             host (str | None): Host for the service (optional; accepted but ignored).
             port (int | None): Port for the service (optional; accepted but ignored).
-        
+
         Returns:
             int: A fake process ID (4321).
         """
@@ -172,10 +172,10 @@ models:
     def _fake_stop_controller(_config: Any) -> bool:  # noqa: ANN401
         """
         Simulates stopping the controller and records that a stop was requested.
-        
+
         Parameters:
             _config (Any): Ignored; present to match the real stop function signature.
-        
+
         Returns:
             bool: `True` to indicate the simulated stop succeeded.
         """
@@ -369,7 +369,7 @@ def test_vram_admin_endpoints_invoke_registry(
         def __init__(self) -> None:
             """
             Initialize the tracker for loaded and unloaded models.
-            
+
             Creates two empty lists, `loaded` and `unloaded`, used to record model names that have been loaded or unloaded during tests.
             """
             self.loaded: list[str] = []
@@ -382,16 +382,16 @@ def test_vram_admin_endpoints_invoke_registry(
             # Reference them to avoid unused-variable warnings in static analysis.
             """
             Request loading a model into VRAM for testing purposes.
-            
+
             Accepts `force` and `timeout` for compatibility with the real API (they are ignored).
             If `name` equals "denied", raises an HTTP 400 validation error with detail "denied".
             Otherwise records the model name by appending it to `self.loaded`.
-            
+
             Parameters:
                 name (str): The model name to load.
                 force (bool): Ignored; kept for API compatibility.
                 timeout (float | None): Ignored; kept for API compatibility.
-            
+
             Raises:
                 HTTPException: HTTP 400 with detail "denied" when `name` is "denied".
             """
@@ -406,11 +406,11 @@ def test_vram_admin_endpoints_invoke_registry(
             # reference it to avoid unused-variable warnings.
             """
             Record a VRAM unload request for the specified model name.
-            
+
             Parameters:
                 name (str): The model identifier to unload.
                 timeout (float | None): Accepted for API compatibility but ignored.
-            
+
             Raises:
                 HTTPException: with status 400 and detail "not loaded" when `name` equals "missing".
             """
@@ -443,14 +443,14 @@ def test_vram_admin_endpoints_surface_registry_errors(
         ) -> None:
             """
             Request loading the specified model's weights into VRAM.
-            
+
             Parameters:
-            	name: The model identifier to load into VRAM.
-            	force (bool): If true, attempt to force the load despite capacity constraints.
-            	timeout (float | None): Maximum seconds to wait for the load to complete, or None to not wait.
-            
+                name: The model identifier to load into VRAM.
+                force (bool): If true, attempt to force the load despite capacity constraints.
+                timeout (float | None): Maximum seconds to wait for the load to complete, or None to not wait.
+
             Raises:
-            	HTTPException: With status code 429 when the model's group is busy and the load cannot be accepted.
+                HTTPException: With status code 429 when the model's group is busy and the load cannot be accepted.
             """
             _ = (force, timeout)
             raise HTTPException(status_code=HTTPStatus.TOO_MANY_REQUESTS, detail="group busy")
@@ -458,13 +458,13 @@ def test_vram_admin_endpoints_surface_registry_errors(
         async def request_vram_unload(self, name: str, *, timeout: float | None = None) -> None:
             """
             Request unloading a model from VRAM.
-            
+
             This implementation always fails when the model is not loaded and raises an HTTP 400 error with detail "not loaded".
-            
+
             Parameters:
                 name (str): Name of the model to unload from VRAM.
                 timeout (float | None): Ignored; kept for API compatibility.
-                
+
             Raises:
                 HTTPException: Always raised with status code 400 and detail "not loaded".
             """
@@ -501,7 +501,7 @@ class FakeManager:
     def is_vram_loaded(self) -> bool:
         """
         Indicates whether VRAM is currently loaded for this manager.
-        
+
         Returns:
             True if VRAM is loaded, False otherwise.
         """
@@ -572,13 +572,13 @@ async def test_hub_sync_once_updates_registry(monkeypatch: pytest.MonkeyPatch) -
     ) -> dict[str, Any]:
         """
         Return the pre-captured hub snapshot regardless of the supplied request parameters.
-        
+
         Parameters:
             cfg: Ignored. Placeholder for a configuration object passed by callers.
             method: Ignored. HTTP method string (e.g., "GET", "POST").
             path: Ignored. Request path sent to the daemon API.
             timeout: Ignored. Timeout value for the call in seconds.
-        
+
         Returns:
             dict: The hub snapshot dictionary provided by the enclosing test fixture.
         """
@@ -588,10 +588,10 @@ async def test_hub_sync_once_updates_registry(monkeypatch: pytest.MonkeyPatch) -
         # Return a simple object with host/port attributes
         """
         Produce a SimpleNamespace containing host and port for a fake configuration.
-        
+
         Parameters:
             req (object): Ignored; present for compatibility with callers.
-        
+
         Returns:
             SimpleNamespace: An object with attributes `host` (str) set to "127.0.0.1" and `port` (int) set to 5005.
         """

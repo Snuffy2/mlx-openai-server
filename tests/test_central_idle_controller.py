@@ -24,14 +24,14 @@ async def _wait_for_condition(
 ) -> bool:
     """
     Waits until the provided condition returns True or the timeout is reached.
-    
+
     Periodically evaluates condition_func every poll_interval seconds until it returns True or timeout seconds have elapsed.
-    
+
     Parameters:
         condition_func (Callable[[], bool]): Function evaluated repeatedly; should return True when the desired condition is met.
         timeout (float): Maximum number of seconds to wait for the condition.
         poll_interval (float): Seconds to wait between successive evaluations of condition_func.
-    
+
     Returns:
         bool: `True` if the condition became true before timeout, `False` otherwise.
     """
@@ -49,7 +49,7 @@ class FakeManager:  # type: ignore[override]
     def __init__(self) -> None:
         """
         Create a manager initialized to report VRAM as loaded and with no recorded unload attempts.
-        
+
         Attributes:
             _loaded (bool): True if VRAM is currently considered loaded.
             unload_calls (int): Number of times an unload has been attempted.
@@ -60,7 +60,7 @@ class FakeManager:  # type: ignore[override]
     def is_vram_loaded(self) -> bool:
         """
         Indicates whether the manager's VRAM is currently loaded.
-        
+
         Returns:
             `True` if VRAM is loaded, `False` otherwise.
         """
@@ -74,9 +74,9 @@ class FakeManager:  # type: ignore[override]
     ) -> None:
         """
         Ensure the manager's VRAM state is marked as loaded.
-        
+
         Parameters:
-        	force (bool): If True, mark VRAM as loaded even if it is already marked loaded. The method is idempotent.
+                force (bool): If True, mark VRAM as loaded even if it is already marked loaded. The method is idempotent.
         """
         await asyncio.sleep(0)
         if not self._loaded or force:
@@ -85,7 +85,7 @@ class FakeManager:  # type: ignore[override]
     async def release_vram(self, *, _timeout: float | None = None) -> None:
         """
         Release simulated VRAM for this fake manager and record the unload.
-        
+
         Marks the manager as not having VRAM loaded and increments the `unload_calls` counter if VRAM was previously loaded. Accepts an optional `_timeout` parameter which is ignored. The method yields briefly to allow cooperative scheduling.
         """
         await asyncio.sleep(0)
@@ -134,7 +134,7 @@ def test_activity_resets_idle_timer() -> None:
     async def _test() -> None:
         """
         Verifies that activity during a handler session prevents auto-unload and that the model is unloaded after the session ends.
-        
+
         Starts a controller with a model configured for immediate auto-unload (auto_unload_minutes = 0), opens a handler session for that model to simulate activity, asserts the model remains loaded while the session is active, then asserts the controller unloads the model promptly after the session closes.
         """
         registry = ModelRegistry()
@@ -174,14 +174,14 @@ def test_activity_resets_idle_timer() -> None:
 def test_unload_failure_triggers_backoff() -> None:
     """
     Verify that when a model's unload operation fails, the controller applies a backoff and does not retry immediately.
-    
+
     Registers a model whose manager raises on unload, starts the controller, asserts that exactly one unload attempt occurs, then waits to confirm no additional attempts are made during the backoff period.
     """
 
     async def _test() -> None:
         """
         Verifies the controller applies backoff when a model's unload fails and does not retry immediately.
-        
+
         Registers a manager that raises on the first unload attempt, starts the CentralIdleAutoUnloadController, and asserts the controller attempts exactly one unload and does not retry during the backoff window before stopping the controller.
         """
         calls = {"count": 0}
@@ -190,12 +190,12 @@ def test_unload_failure_triggers_backoff() -> None:
             async def release_vram(self, *, timeout: float | None = None) -> None:
                 """
                 Simulate an attempted VRAM release that always fails.
-                
+
                 Increments the internal failure counter and then raises a RuntimeError to emulate an unload failure.
-                
+
                 Parameters:
                     timeout (float | None): Optional maximum time in seconds allowed for the unload attempt; accepted but not used by this simulation.
-                
+
                 Raises:
                     RuntimeError: Always raised to indicate a simulated unload failure.
                 """
@@ -240,7 +240,7 @@ async def test_central_controller_unloads_idle_model_with_fake_registry() -> Non
         def list_models(self) -> list[dict]:
             """
             List models known to the registry along with their metadata.
-            
+
             Returns:
                 A list of model dictionaries where each item contains an "id" (model identifier) and a "metadata" dictionary (for example, including "auto_unload_minutes").
             """
@@ -249,10 +249,10 @@ async def test_central_controller_unloads_idle_model_with_fake_registry() -> Non
         def get_vram_status(self, _model_id: str) -> dict:
             """
             Provide a simulated VRAM status for the given model.
-            
+
             Parameters:
                 _model_id (str): Model identifier (ignored by this fake implementation).
-            
+
             Returns:
                 dict: A mapping with keys:
                     - "vram_loaded": `True` indicating VRAM is currently loaded.
@@ -270,15 +270,15 @@ async def test_central_controller_unloads_idle_model_with_fake_registry() -> Non
         def get_handler(self, _model_id: str) -> None:
             """
             Retrieve a handler for the given model ID; this implementation always indicates no handler is available.
-            
+
             This registry does not provide per-model handlers and therefore returns None for any model ID.
             """
-            return None
+            return
 
         async def request_vram_unload(self, _model_id: str) -> None:
             """
             Signal that a VRAM unload was requested for the given model by setting the internal event.
-            
+
             Parameters:
                 _model_id (str): Identifier of the model for which unload was requested. This parameter is ignored.
             """
@@ -298,7 +298,7 @@ async def test_central_controller_unloads_idle_model_with_fake_registry() -> Non
 async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
     """
     Verifies that notify_activity prevents the controller from requesting an unload when a handler reports recent activity.
-    
+
     Sets up a fake registry and handler where the handler can report recent activity, starts the CentralIdleAutoUnloadController, signals recent activity via controller.notify_activity, and asserts that no unload request is made within a short window.
     """
     unloaded = asyncio.Event()
@@ -307,7 +307,7 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def __init__(self) -> None:
             """
             Initialize the instance and set the default timeout.
-            
+
             Sets the internal attribute `self._seconds` to 120.0, representing the default timeout value in seconds.
             """
             self._seconds = 120.0
@@ -315,7 +315,7 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def seconds_since_last_activity(self) -> float:
             """
             Report how many seconds have elapsed since the last recorded activity.
-            
+
             Returns:
                 seconds (float): Number of seconds since the last recorded activity.
             """
@@ -324,7 +324,7 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def set_recent(self) -> None:
             """
             Mark the handler as having recent activity by resetting its idle timer.
-            
+
             This sets the internal seconds-since-last-activity counter to 0.0 to indicate immediate recent activity.
             """
             self._seconds = 0.0
@@ -335,11 +335,11 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def list_models(self) -> list[dict]:
             """
             Return the list of registered models.
-            
+
             Each item is a dict with keys:
             - "id": model identifier string.
             - "metadata": dict containing model metadata; includes "auto_unload_minutes" (int) specifying idle minutes before auto-unload.
-            
+
             Returns:
                 list[dict]: List of model descriptors as described above.
             """
@@ -348,10 +348,10 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def get_vram_status(self, _model_id: str) -> dict:
             """
             Provide a simulated VRAM status for the given model.
-            
+
             Parameters:
                 _model_id (str): Model identifier (ignored by this fake implementation).
-            
+
             Returns:
                 dict: A mapping with keys:
                     - "vram_loaded": `True` indicating VRAM is currently loaded.
@@ -369,10 +369,10 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         def get_handler(self, _model_id: str) -> FakeHandler:
             """
             Get the fake handler associated with the given model id.
-            
+
             Parameters:
                 _model_id (str): Model identifier used to look up the handler.
-            
+
             Returns:
                 FakeHandler: The fake handler instance associated with the model id.
             """
@@ -381,7 +381,7 @@ async def test_notify_activity_prevents_unload_with_fake_registry() -> None:
         async def request_vram_unload(self, _model_id: str) -> None:
             """
             Signal that a VRAM unload was requested for the given model by setting the internal event.
-            
+
             Parameters:
                 _model_id (str): Identifier of the model for which unload was requested. This parameter is ignored.
             """
