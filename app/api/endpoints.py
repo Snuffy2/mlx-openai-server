@@ -469,7 +469,7 @@ async def queue_stats(
     dict[str, Any] or JSONResponse
         Queue statistics or error response.
     """
-    api_model_id, handler_name, validation_error = _resolve_model_for_openai_api(
+    _api_model_id, handler_name, validation_error = _resolve_model_for_openai_api(
         raw_request, model, provided_explicitly=model is not None
     )
     if validation_error is not None:

@@ -133,6 +133,27 @@ def start_hub_service_process(
 
 hub_router = APIRouter()
 
+# Keep references to any fire-and-forget background tasks created by
+# this module so they are not garbage-collected before completion.
+# Tasks are removed from the set when they finish via a done callback.
+_background_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _retain_task(task: asyncio.Task[Any]) -> None:
+    """Add `task` to the module-level set and register a callback to remove it when complete.
+
+    This ensures background tasks created here are retained until they
+    finish and avoids silent cancellation via GC.
+    """
+    _background_tasks.add(task)
+
+    def _on_done(t: asyncio.Task[Any]) -> None:
+        with contextlib.suppress(Exception):
+            _background_tasks.discard(t)
+
+    task.add_done_callback(_on_done)
+
+
 # Jinja2 templates directory (project root / `templates`)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[2] / "templates"))
 
@@ -1348,7 +1369,8 @@ async def _hub_memory_controller_action(
                 # Request task was cancelled (client disconnected). Ensure
                 # the load continues in background and return a requested
                 # response.
-                asyncio.create_task(coro)
+                task = asyncio.create_task(coro)
+                _retain_task(task)
                 message = f"Model '{target}' memory load requested (running in background)"
         else:
             coro = controller.unload_model(target)
@@ -1356,7 +1378,8 @@ async def _hub_memory_controller_action(
                 await asyncio.shield(coro)
                 message = f"Model '{target}' memory unload requested"
             except asyncio.CancelledError:
-                asyncio.create_task(coro)
+                task = asyncio.create_task(coro)
+                _retain_task(task)
                 message = f"Model '{target}' memory unload requested (running in background)"
     except BrokenPipeError as e:  # pragma: no cover - defensive handling
         # Broken pipe can surface from low-level I/O during heavy init; log
@@ -1366,11 +1389,12 @@ async def _hub_memory_controller_action(
             f"Broken pipe while executing {action} for {target}: {e}",
         )
         try:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 controller.load_model(target)
                 if action == "load"
                 else controller.unload_model(target)
             )
+            _retain_task(task)
         except Exception:
             logger.debug("Failed to schedule background model action after BrokenPipeError")
         message = f"Model '{target}' memory {action} requested (running in background)"

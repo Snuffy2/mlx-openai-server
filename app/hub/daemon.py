@@ -166,11 +166,22 @@ class HubSupervisor:
             if not record.manager.jit_enabled:
                 await record.manager.ensure_loaded("start")
                 if self.registry:
-                    # Use the guaranteed registered model_id (original_model_path) for update_model_state
+                    # Use the registered model_id (original_model_path) for update_model_state
                     model_id_for_registry = (
                         original_model_path if original_model_path else record.model_path
                     )
-                    assert model_id_for_registry is not None
+                    if model_id_for_registry is None:
+                        logger.error(
+                            "Registry update skipped: missing model id for registry. "
+                            "model=%r original_model_path=%r record.model_path=%r manager=%r",
+                            name,
+                            original_model_path,
+                            record.model_path,
+                            getattr(record, "manager", None),
+                        )
+                        raise RuntimeError(
+                            f"Cannot update registry for model '{name}': model id is None"
+                        )
                     await self.registry.update_model_state(
                         model_id_for_registry, handler=record.manager
                     )
@@ -179,11 +190,22 @@ class HubSupervisor:
 
             # JIT enabled: just create the manager, don't load yet
             if self.registry:
-                # Use the guaranteed registered model_id (original_model_path) for update_model_state
+                # Use the registered model_id (original_model_path) for update_model_state
                 model_id_for_registry = (
                     original_model_path if original_model_path else record.model_path
                 )
-                assert model_id_for_registry is not None
+                if model_id_for_registry is None:
+                    logger.error(
+                        "Registry update skipped: missing model id for registry (JIT start). "
+                        "model=%r original_model_path=%r record.model_path=%r manager=%r",
+                        name,
+                        original_model_path,
+                        record.model_path,
+                        getattr(record, "manager", None),
+                    )
+                    raise RuntimeError(
+                        f"Cannot update registry for model '{name}' (JIT start): model id is None"
+                    )
                 await self.registry.update_model_state(
                     model_id_for_registry, handler=record.manager
                 )
@@ -364,6 +386,15 @@ class HubSupervisor:
             self._models = {}
             for model in models_list:
                 name = getattr(model, "name", None) or str(model)
+                # Detect duplicate names in the reloaded configuration (same
+                # behavior as the constructor which validates duplicates).
+                if name in self._models:
+                    first_existing_record = self._models[name]
+                    raise ValueError(
+                        f"Duplicate model name '{name}' detected in hub configuration. "
+                        f"First model: {first_existing_record.config!r}, "
+                        f"Duplicate model: {model!r}",
+                    )
                 # Preserve existing record if it exists
                 existing_record = old_models.get(name)
                 if existing_record:
