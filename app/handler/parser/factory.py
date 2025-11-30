@@ -137,15 +137,14 @@ class ParserFactory:
         **kwargs: Any,
     ) -> BaseThinkingParser | BaseToolParser | HarmonyParser | None:
         """
-        Create a parser instance from the registry.
-
-        Args:
-            parser_name: Name of the parser (e.g., "qwen3", "glm4_moe", "harmony")
-            parser_type: Type of parser ("thinking", "tool", or "unified")
-
-        Returns
-        -------
-            Parser instance or None if parser type not available
+        Instantiate a parser registered under the given name and type.
+        
+        Parameters:
+            parser_name (str): Registered parser name (e.g., "qwen3", "glm4_moe", "harmony").
+            parser_type (str): Requested parser type: "thinking", "tool", or "unified".
+        
+        Returns:
+            BaseThinkingParser | BaseToolParser | HarmonyParser | None: The created parser instance, or `None` if the parser name is unknown or the requested type is not available.
         """
         if parser_name not in PARSER_REGISTRY:
             logger.warning(f"Unknown parser name: {parser_name}")
@@ -175,19 +174,19 @@ class ParserFactory:
         BaseThinkingParser | BaseToolParser | HarmonyParser | None,
     ]:
         """
-        Create thinking and tool parsers based on manual configuration.
-
-        Parsers are only created when explicitly specified. If no parsers are
-        specified, both will be None.
-
-        Args:
-            model_type: The type of the model (for logging/debugging purposes)
-            manual_reasoning_parser: Manually specified reasoning parser name
-            manual_tool_parser: Manually specified tool parser name
-
-        Returns
-        -------
-            Tuple of (thinking_parser, tool_parser). Both will be None if not specified.
+        Create thinking and tool parsers according to explicit manual configuration.
+        
+        If either manual parser name is "harmony", a unified Harmony parser will be created and returned as the thinking/parser tuple (harmony_parser, None). Parsers are only instantiated when their names are provided; unspecified or failed creations yield `None` for that slot.
+        
+        Parameters:
+            model_type (str): Model type used for logging or diagnostic messages.
+            manual_reasoning_parser (str | None): Name of the reasoning parser to instantiate, or None to skip.
+            manual_tool_parser (str | None): Name of the tool parser to instantiate, or None to skip.
+        
+        Returns:
+            tuple:
+                thinking_parser: The instantiated thinking/unified parser or `None`.
+                tool_parser: The instantiated tool parser or `None`. If a unified Harmony parser is returned, this value will be `None`.
         """
         # Handle unified parsers (harmony) - handles both thinking and tools
         if manual_reasoning_parser == "harmony" or manual_tool_parser == "harmony":
@@ -225,14 +224,13 @@ class ParserFactory:
     @staticmethod
     def create_converter(model_type: str, **kwargs: Any) -> BaseMessageConverter | None:
         """
-        Create a message converter based on model type.
-
-        Args:
-            model_type: The type of the model (e.g., "glm4_moe", "minimax")
-
-        Returns
-        -------
-            Message converter instance or None if no converter needed
+        Return the message converter for the given model type or None if no converter is registered.
+        
+        Parameters:
+            model_type (str): Model identifier (e.g., "glm4_moe", "minimax").
+        
+        Returns:
+            BaseMessageConverter | None: An instance of the registered message converter for the model type, or `None` if no converter is registered.
         """
         if model_type not in CONVERTER_REGISTRY:
             return None

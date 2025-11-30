@@ -52,7 +52,11 @@ class TestBaseToolParser(unittest.TestCase):
         ]
 
     def test_parse_stream(self) -> None:
-        """Test parsing stream."""
+        """
+        Verify BaseToolParser.parse_stream produces the expected sequence of outputs for each chunked input scenario.
+        
+        For each test case in self.test_cases, the method feeds the sequence of chunks to a BaseToolParser initialized with "<tool_call>" and "</tool_call>", collects non-None parsed outputs, flushes remaining content by passing None, and asserts the collected outputs exactly match the test case's expected_outputs.
+        """
         for test_case in self.test_cases:
             with self.subTest(msg=test_case["name"]):
                 parser = BaseToolParser("<tool_call>", "</tool_call>")

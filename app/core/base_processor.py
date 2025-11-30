@@ -107,6 +107,11 @@ class BaseProcessor(ABC):
         return self._session
 
     def _cleanup_old_files(self) -> None:
+        """
+        Remove temporary files older than the configured cleanup interval and perform periodic cache eviction.
+        
+        Checks the instance temp directory and deletes files whose modification time is older than the cleanup interval, updates the last-cleanup timestamp, evicts the oldest cache entries when the hash cache exceeds 80% of its configured size, and forces a garbage-collection pass. Logs a warning containing the media type name and exception details if cleanup fails.
+        """
         current_time = time.time()
         if current_time - self._last_cleanup > self._cleanup_interval:
             try:
@@ -125,6 +130,19 @@ class BaseProcessor(ABC):
                 )
 
     async def _process_single_media(self, media_url: str, **kwargs: Any) -> str:
+        """
+        Process a single media resource (local file path, data URL, or HTTP/HTTPS URL), validate it, store a processed copy in the temporary cache, and return the cached file path.
+        
+        Parameters:
+            media_url (str): Local file path, data URL starting with "data:", or an HTTP/HTTPS URL pointing to the media.
+            **kwargs: Passed through to the media-specific processing implementation (`_process_media_data`).
+        
+        Returns:
+            cached_path (str): Filesystem path to the processed media file in the temporary cache.
+        
+        Raises:
+            ValueError: If the media cannot be read, exceeds size limits, fails format validation, encounters HTTP errors, or processing fails.
+        """
         try:
             media_hash = self._get_media_hash(media_url)
             media_format = self._get_media_format(media_url)

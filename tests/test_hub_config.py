@@ -17,6 +17,18 @@ def _stub_port_probe(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _write_yaml(path: Path, contents: str) -> Path:
+    """
+    Write dedented YAML content to the given file path and return that path.
+    
+    Dedents and strips leading/trailing whitespace from `contents`, writes the result to `path` using UTF-8 encoding, and returns `path`.
+    
+    Parameters:
+        path (Path): Target file path to write.
+        contents (str): YAML content to write; will be dedented and stripped before writing.
+    
+    Returns:
+        Path: The same `path` that was written to.
+    """
     path.write_text(dedent(contents).strip(), encoding="utf-8")
     return path
 
@@ -196,6 +208,14 @@ def test_auto_port_skips_in_use_candidates(tmp_path: Path, monkeypatch: pytest.M
     calls: list[int] = []
 
     def _fake_probe(_host: str | None = None, port: int | None = None) -> bool:
+        """
+        Simulate probing a host/port for availability while recording probed ports.
+        
+        Records the probed port in an external `calls` list and reports availability `False` for port 47850 and `True` for any other port.
+        
+        Returns:
+            bool: `True` if the port is considered available, `False` otherwise.
+        """
         assert port is not None
         calls.append(port)
         return port != 47850
@@ -223,6 +243,16 @@ def test_explicit_port_in_use_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """Explicit ports should also be probed and rejected when busy."""
 
     def _fake_probe(_host: str | None = None, port: int | None = None) -> bool:
+        """
+        Simulate probing a TCP port for availability during tests.
+        
+        Parameters:
+            _host (str | None): Ignored; included to match probe signature.
+            port (int | None): TCP port to probe.
+        
+        Returns:
+            bool: `True` if the given port should be treated as available, `False` if unavailable (port 60010 is treated as unavailable).
+        """
         return port != 60010  # Make 60010 unavailable, others available
 
     monkeypatch.setattr("app.hub.config.is_port_available", _fake_probe)
@@ -262,6 +292,18 @@ def test_auto_ports_reuse_persisted_assignment_when_busy(
     busy_ports = {assigned_port}
 
     def _fake_probe(_host: str | None = None, port: int | None = None) -> bool:
+        """
+        Determine whether a given port should be treated as available for tests.
+        
+        The `_host` parameter is ignored. Returns `true` if `port` is not present in the module-level `busy_ports` collection, `false` otherwise.
+        
+        Parameters:
+            _host (str | None): Ignored placeholder for host.
+            port (int | None): Port to check.
+        
+        Returns:
+            `true` if the port is not in `busy_ports`, `false` otherwise.
+        """
         return port not in busy_ports
 
     monkeypatch.setattr("app.hub.config.is_port_available", _fake_probe)

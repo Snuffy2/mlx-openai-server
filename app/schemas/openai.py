@@ -23,7 +23,18 @@ class OpenAIBaseModel(BaseModel):
     @model_validator(mode="wrap")
     @classmethod
     def __log_extra_fields__(cls, data: Any, handler: Any) -> Any:
-        """Log any extra fields present in the request data."""
+        """
+        Log a warning if input data contains fields not recognized by the model.
+        
+        If `data` is a mapping, compares its keys against the model's known field names and aliases and logs a warning listing any unrecognized keys. When the model's cached `field_names` is empty, this validator populates it with defined field names and aliases before performing the comparison.
+        
+        Parameters:
+            data (Any): The incoming request data to inspect; only mappings (dict-like) are checked for extra fields.
+            handler (Callable[[Any], Any]): The next validator/handler to invoke with `data`.
+        
+        Returns:
+            Any: The result returned by invoking `handler(data)`.
+        """
         result = handler(data)
         if not isinstance(data, dict):
             return result

@@ -44,16 +44,15 @@ class MLX_VLM:
         trust_remote_code: bool = DEFAULT_TRUST_REMOTE_CODE,
     ) -> None:
         """
-        Initialize the MLX_VLM model.
-
-        Args:
-            model_path (str): Path to the model directory containing model weights and configuration.
-            context_length (int): Maximum context length for the model. Defaults to DEFAULT_CONTEXT_LENGTH from app.const.
-            trust_remote_code (bool): Enable trust_remote_code when loading models. Defaults to DEFAULT_TRUST_REMOTE_CODE from app.const.
-
-        Raises
-        ------
-            ValueError: If model loading fails.
+        Load and initialize the MLX multimodal vision-language model and its processor.
+        
+        Parameters:
+            model_path (str): Filesystem path to the model directory or archive containing model weights and configuration.
+            context_length (int): Maximum key-value cache / context length to use for generation; sets the instance's max_kv_size.
+            trust_remote_code (bool): If true, allow execution of remote model code when loading models.
+        
+        Raises:
+            ValueError: If the model or processor cannot be loaded.
         """
         try:
             # See comment in mlx_lm: disable stderr writes from progress
@@ -96,19 +95,17 @@ class MLX_VLM:
         **kwargs: Any,
     ) -> tuple[str | Generator[str, None, None], int]:
         """
-        Generate text response from images and messages.
-
-        Args:
-            messages (list[dict[str, Any]]): OpenAI-style message dicts (including multimodal content).
-            stream (bool, optional): Whether to stream the response. Defaults to False.
-            **kwargs: Additional model parameters (chat_template_kwargs, temperature, max_tokens, etc.)
-
-        Returns
-        -------
-            tuple[str | Generator[str, None, None], int]:
-                A tuple where:
-                - First element: Complete response as string (if stream=False) or Generator yielding response chunks (if stream=True)
-                - Second element: Number of prompt tokens used
+        Generate a text response from OpenAI-style chat messages and optional multimodal inputs.
+        
+        Processes any images or videos referenced in `messages`, prepares model inputs, and invokes either streaming or non-streaming generation.
+        
+        Parameters:
+            messages (list[dict[str, Any]]): OpenAI-style message dictionaries; may include multimodal content (image/video references).
+            stream (bool): If True, return a generator that yields response chunks; if False, return the full response string.
+            **kwargs: Additional model/generation options (for example, `chat_template_kwargs`, `temperature`, `max_tokens`, etc.).
+        
+        Returns:
+            tuple[str | Generator[str, None, None], int]: A tuple (response, prompt_tokens) where `response` is the full generated string when `stream=False` or a generator yielding string chunks when `stream=True`, and `prompt_tokens` is the number of tokens in the prompt.
         """
         chat_template_kwargs = kwargs.pop("chat_template_kwargs", {})
         text = self.processor.apply_chat_template(

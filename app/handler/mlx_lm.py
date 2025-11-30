@@ -47,24 +47,16 @@ class MLXLMHandler:
         trust_remote_code: bool = DEFAULT_TRUST_REMOTE_CODE,
     ) -> None:
         """
-        Initialize the handler with the specified model path.
-
-        Parameters
-        ----------
-        model_path : str
-            Path to the model directory.
-        context_length : int, optional
-            Maximum context length for the model, by default 32768.
-        max_concurrency : int, optional
-            Maximum number of concurrent model inference tasks, by default 1.
-        enable_auto_tool_choice : bool, optional
-            Enable automatic tool choice, by default False.
-        tool_call_parser : str or None, optional
-            Name of the tool call parser to use (qwen3, glm4_moe, harmony, minimax, ...), by default None.
-        reasoning_parser : str or None, optional
-            Name of the reasoning parser to use (qwen3, qwen3_next, glm4_moe, harmony, minimax, ...), by default None.
-        trust_remote_code : bool, optional
-            Enable trust_remote_code when loading models, by default False.
+        Initialize the MLX language model handler and its runtime resources.
+        
+        Parameters:
+            model_path (str): Path to the model directory or file used to instantiate the underlying MLX_LM.
+            context_length (int): Maximum context length (token window) the model should use.
+            max_concurrency (int): Maximum number of concurrent inference tasks allowed by the internal request queue.
+            enable_auto_tool_choice (bool): If true, allow automatic tool selection during parsing/response handling.
+            tool_call_parser (str | None): Identifier of the tool-call parser to use, or None to disable tool-call parsing.
+            reasoning_parser (str | None): Identifier of the reasoning parser to use, or None to disable reasoning parsing.
+            trust_remote_code (bool): If true, allow loading model code from remote sources when instantiating the model.
         """
         self.model_path = model_path
         self.model = MLX_LM(
@@ -125,19 +117,16 @@ class MLXLMHandler:
 
     def _count_message_tokens(self, messages: list[dict[str, str]], **kwargs: Any) -> int:
         """
-        Count the number of tokens in a list of messages after applying chat template.
-
-        Parameters
-        ----------
-        messages : list[dict[str, str]]
-            List of messages to count tokens for.
-        **kwargs : Any
-            Additional arguments to pass to apply_chat_template.
-
-        Returns
-        -------
-        int
-            The number of prompt tokens.
+        Return the number of prompt tokens for a sequence of chat messages after applying the model's chat template.
+        
+        If applying the chat template fails, falls back to a rough token estimate computed from the concatenated text content of the messages.
+        
+        Parameters:
+            messages (list[dict[str, str]]): Chat messages in the model's expected format.
+            **kwargs: Forwarded to the tokenizer's `apply_chat_template` (e.g., template options).
+        
+        Returns:
+            int: The estimated number of prompt tokens.
         """
         try:
             input_tokens = self.model.tokenizer.apply_chat_template(
@@ -189,7 +178,17 @@ class MLXLMHandler:
         return metadata
 
     async def get_models(self) -> list[dict[str, Any]]:
-        """Get list of available models with their metadata."""
+        """
+        Return a list of available models with their metadata.
+        
+        Returns:
+            list[dict[str, Any]]: A list of model entries where each entry contains keys:
+                - `id` (str): Model identifier (model path).
+                - `object` (str): Object type, e.g., "model".
+                - `created` (int | float): Model creation timestamp.
+                - `owned_by` (str): Owner identifier, e.g., "local".
+                - `metadata` (dict[str, Any]): Model metadata produced by `_extract_model_metadata`.
+        """
         try:
             return [
                 {
@@ -205,7 +204,17 @@ class MLXLMHandler:
             return []
 
     async def initialize(self, queue_config: dict[str, Any] | None = None) -> None:
-        """Initialize the handler and start the request queue."""
+        """
+        Initialize the handler and start the internal request queue.
+        
+        If provided, `queue_config` overrides the existing RequestQueue settings. Supported keys:
+        - `max_concurrency` (int): maximum concurrent worker tasks.
+        - `timeout` (float | int): per-request processing timeout in seconds.
+        - `queue_size` (int): maximum number of queued requests.
+        
+        Parameters:
+            queue_config (dict[str, Any] | None): Optional configuration for the request queue.
+        """
         if not queue_config:
             queue_config = {"max_concurrency": self.request_queue.max_concurrency}
         self.request_queue = RequestQueue(
@@ -221,19 +230,14 @@ class MLXLMHandler:
         request: ChatCompletionRequest,
     ) -> AsyncGenerator[str | dict[str, Any], None]:
         """
-        Generate a streaming response for text-only chat completion requests.
-
-        Uses the request queue for handling concurrent requests.
-
-        Parameters
-        ----------
-        request : ChatCompletionRequest
-            ChatCompletionRequest object containing the messages.
-
-        Yields
-        ------
-        str or dict
-            Response chunks (str) followed by usage info (dict) at the end.
+        Stream text completions for a chat request, yielding incremental output chunks and a final usage report.
+        
+        Parameters:
+            request (ChatCompletionRequest): Chat completion request containing messages and model parameters.
+        
+        Yields:
+            str: Incremental text chunks from the model as they become available.
+            dict: A single final dictionary with key "__usage__" whose value is a UsageInfo object summarizing token usage (`prompt_tokens`, `completion_tokens`, `total_tokens`).
         """
         request_id = f"text-{uuid.uuid4()}"
 
@@ -353,19 +357,16 @@ class MLXLMHandler:
 
     async def generate_text_response(self, request: ChatCompletionRequest) -> dict[str, Any]:
         """
-        Generate a complete response for text-only chat completion requests.
-
-        Uses the request queue for handling concurrent requests.
-
-        Parameters
-        ----------
-        request : ChatCompletionRequest
-            ChatCompletionRequest object containing the messages.
-
-        Returns
-        -------
-        dict
-            Response content and usage info.
+        Generate a completed text chat response and associated token usage for the given chat completion request.
+        
+        Parameters:
+            request (ChatCompletionRequest): Chat completion request containing messages and model parameters.
+        
+        Returns:
+            dict: A mapping with keys:
+                - "response": the model response, which may be a raw string, a parser-specific structured value, or a dict with keys
+                  "reasoning_content" (str|None), "tool_calls" (Any|None), and "content" (str|None).
+                - "usage": a UsageInfo instance with prompt_tokens, completion_tokens, and total_tokens.
         """
         request_id = f"text-{uuid.uuid4()}"
 
@@ -570,10 +571,9 @@ class MLXLMHandler:
 
     async def cleanup(self) -> None:
         """
-        Cleanup resources and stop the request queue before shutdown.
-
-        This method ensures all pending requests are properly cancelled
-        and resources are released.
+        Stop the request queue and release handler resources before shutdown.
+        
+        Stops the request queue if present and performs best-effort cleanup; any errors are logged and not re-raised.
         """
         try:
             logger.info("Cleaning up MLXLMHandler resources")
@@ -588,17 +588,16 @@ class MLXLMHandler:
         request: ChatCompletionRequest,
     ) -> tuple[list[dict[str, str]], dict[str, Any]]:
         """
-        Prepare a text request by parsing model parameters and verifying the format of messages.
-
-        Parameters
-        ----------
-        request : ChatCompletionRequest
-            ChatCompletionRequest object containing the messages.
-
-        Returns
-        -------
-        tuple[list[dict[str, str]], dict[str, Any]]
-            Tuple containing the formatted chat messages and model parameters.
+        Prepare and normalize a chat completion request into model-ready messages and parameters.
+        
+        Parameters:
+            request (ChatCompletionRequest): The incoming chat completion request to validate and convert.
+        
+        Returns:
+            tuple[list[dict[str, str]], dict[str, Any]]: A tuple where the first element is a list of chat message dictionaries (system message merged at index 0 when present) and the second element is the remaining model parameter dictionary ready to pass to the model.
+        
+        Raises:
+            HTTPException: Raised with status 400 if the request cannot be processed or validated.
         """
         try:
             request_dict = request.model_dump()

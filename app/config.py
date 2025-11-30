@@ -82,21 +82,17 @@ class MLXServerConfig:
     lora_scales_str: str | None = DEFAULT_LORA_SCALES_STR
 
     def __post_init__(self) -> None:
-        """Normalize certain CLI fields after instantiation.
-
-        This method processes comma-separated LoRA paths and scales into lists,
-        applies model-type-specific defaults for config_name, validates auto-unload
-        settings, and normalizes log_level.
-
-        Notes
-        -----
-        - Convert comma-separated ``lora_paths`` and ``lora_scales`` into
-          lists when provided.
-        - Apply small model-type-specific defaults for ``config_name``
-          and emit warnings when values appear inconsistent.
-        - Validate that ``auto_unload_minutes`` requires ``jit_enabled`` to be True.
-        - Validate that ``auto_unload_minutes`` is positive when set.
-        - Normalize ``log_level`` to uppercase.
+        """
+        Normalize and validate configuration fields after dataclass initialization.
+        
+        Parses comma-separated `lora_paths_str` and `lora_scales_str` into `lora_paths` and
+        `lora_scales`, applies model-type defaults and consistency checks for `config_name`,
+        validates `auto_unload_minutes` requirements, normalizes `log_level` to uppercase,
+        and trims `name` and `group`, converting empty values to `None`.
+        
+        Raises:
+            ValueError: If `auto_unload_minutes` is set while `jit_enabled` is False, or if
+                `auto_unload_minutes` is less than or equal to zero.
         """
         # Process comma-separated LoRA paths and scales into lists (or None)
         if self.lora_paths_str:
@@ -154,8 +150,10 @@ class MLXServerConfig:
 
     @property
     def model_identifier(self) -> str:
-        """Get the appropriate model identifier based on model type.
-
-        For Flux models, we always use model_path (local directory path).
+        """
+        Provide the model identifier for this configuration.
+        
+        Returns:
+            str: The model identifier, currently equal to the configured `model_path`.
         """
         return self.model_path

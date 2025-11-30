@@ -31,6 +31,13 @@ class MinimaxToolParser(BaseToolParser):
     """Parser for MiniMax model's tool response format with XML-style arguments."""
 
     def __init__(self) -> None:
+        """
+        Initialize the parser with MiniMax tool markers and compile regex patterns used to extract tool-call details.
+        
+        Sets:
+        - `func_detail_regex`: matches an `<invoke name="...">` block and captures the function name and the rest of the content.
+        - `func_arg_regex`: matches `<parameter name="...">value</parameter>` entries and captures parameter names and their string values.
+        """
         super().__init__(tool_open=TOOL_OPEN, tool_close=TOOL_CLOSE)
         # Regex patterns for parsing MiniMax tool calls
         self.func_detail_regex = re.compile(r'<invoke name="([^"]+)"\s*>(.*)', re.DOTALL)
@@ -40,7 +47,17 @@ class MinimaxToolParser(BaseToolParser):
         )
 
     def _deserialize_value(self, value: str) -> Any:
-        """Try to deserialize a value from string to appropriate Python type."""
+        """
+        Convert a string representation into the corresponding Python value.
+        
+        Attempts to parse the stripped input as JSON, then as a Python literal; if both parse attempts fail, returns the stripped original string.
+        
+        Parameters:
+            value (str): The input string to deserialize; leading and trailing whitespace will be removed.
+        
+        Returns:
+            Any: The deserialized Python object (e.g., dict, list, int, float, bool), or the stripped original string if parsing fails.
+        """
         value = value.strip()
 
         # Try JSON parsing first
@@ -59,7 +76,18 @@ class MinimaxToolParser(BaseToolParser):
         return value
 
     def _parse_tool_content(self, tool_content: str) -> dict[str, Any] | None:
-        """Override the base method to parse MiniMax's specific tool call format."""
+        """
+        Parse a MiniMax-formatted tool call string into a dictionary with the function name and its arguments.
+        
+        Parameters:
+            tool_content (str): The raw MiniMax tool call content to parse.
+        
+        Returns:
+            dict[str, Any] | None: A dictionary with keys:
+                - "name": the parsed function name (str).
+                - "arguments": a dict mapping argument names (str) to their deserialized values.
+            Returns `None` if the content cannot be parsed.
+        """
         try:
             # Extract function name and arguments section
             detail_match = self.func_detail_regex.search(tool_content)

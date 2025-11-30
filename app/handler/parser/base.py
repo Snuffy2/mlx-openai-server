@@ -442,7 +442,19 @@ class BaseMessageConverter:
         return converted_messages
 
     def _convert_single_message(self, message: dict[str, Any]) -> dict[str, Any]:
-        """Convert a single message."""
+        """
+        Convert tool call argument strings to structured objects within a single message.
+        
+        If the message contains a "tool_calls" list, each entry with a "function" key whose
+        "arguments" value is a JSON string will be converted to a parsed object via
+        _self._convert_tool_calls_. The input dictionary is mutated in-place and returned.
+        
+        Parameters:
+            message (dict[str, Any]): A message dictionary that may contain a "tool_calls" list.
+        
+        Returns:
+            dict[str, Any]: The same message dictionary, potentially modified with parsed tool call arguments.
+        """
         # Convert function.arguments from string to object in tool_calls
         tool_calls = message.get("tool_calls")
         if tool_calls and isinstance(tool_calls, list):

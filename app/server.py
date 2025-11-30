@@ -114,6 +114,15 @@ def configure_logging(
     # Add console handler. Exclude records that are specific to a model
     # (they will be written to per-model log files instead).
     def _global_filter(record: dict[str, Any]) -> bool:  # pragma: no cover - tiny helper
+        """
+        Allow only log records that are not tied to a specific model.
+        
+        Parameters:
+            record (dict[str, Any]): A logging record dictionary; expected to contain an "extra" mapping.
+        
+        Returns:
+            bool: `True` if `record["extra"]["model"]` is absent or if an error occurs while inspecting the record, `False` if a model identifier is present.
+        """
         try:
             return record.get("extra", {}).get("model") is None
         except Exception:
@@ -168,7 +177,15 @@ def get_model_identifier(config_args: MLXServerConfig) -> str:
 
 
 def get_registry_model_id(config_args: MLXServerConfig) -> str:
-    """Return the identifier used when registering models with the registry."""
+    """
+    Determine the model identifier to use when registering the model in the ModelRegistry.
+    
+    Parameters:
+        config_args (MLXServerConfig): Server configuration containing model identity fields.
+    
+    Returns:
+        str: The registry identifier — `config_args.name` if set, otherwise `config_args.model_identifier`.
+    """
     return config_args.name or config_args.model_identifier
 
 
@@ -206,31 +223,16 @@ def validate_mflux_config(
 
 
 async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
-    """Instantiate and initialize the MLX handler for the given config.
-
-    Based on the model type in the configuration, this function creates
-    the appropriate handler instance (e.g., MLXLMHandler for language
-    models, MLXVLMHandler for multimodal, etc.) and initializes it with
-    the provided settings.
-
-    Parameters
-    ----------
-    config_args : MLXServerConfig
-        Configuration object containing model type, path, and other
-        handler initialization parameters.
-
-    Returns
-    -------
-    handler
-        An initialized MLX handler instance ready for use.
-
-    Raises
-    ------
-    ValueError
-        If the model type is unsupported or required dependencies are
-        missing (e.g., mflux for image generation).
-    Exception
-        If handler initialization fails for any reason.
+    """
+    Create and initialize an MLX handler that matches the given server configuration.
+    
+    Initializes a handler appropriate for the configured model_type (e.g., language model, multimodal, image generation, embeddings, image editing, or Whisper) and prepares it with runtime settings such as concurrency, timeout, and queue size.
+    
+    Returns:
+        An initialized MLXHandler instance ready to serve requests.
+    
+    Raises:
+        ValueError: If the configured model_type is unsupported or a required `config_name` is missing for image-generation or image-edit models.
     """
     model_identifier = get_model_identifier(config_args)
     if config_args.model_type == "image-generation":
@@ -336,16 +338,13 @@ class LazyHandlerManager(ManagerProtocol):
         on_change: Callable[[MLXHandler | None], None] | None = None,
         on_activity: Callable[[], None] | None = None,
     ) -> None:
-        """Initialize the LazyHandlerManager.
-
-        Parameters
-        ----------
-        config_args : MLXServerConfig
-            Configuration arguments for the server.
-        on_change : Callable[[MLXHandler | None], None], optional
-            Callback called when the handler changes.
-        on_activity : Callable[[], None], optional
-            Callback called on activity.
+        """
+        Create a LazyHandlerManager that manages a single MLXHandler instance and related resources.
+        
+        Parameters:
+            config_args (MLXServerConfig): Server and model configuration used to control loading, JIT, logging, and unload behaviour.
+            on_change (Callable[[MLXHandler | None], None] | None): Optional callback invoked when the managed handler changes; receives the current handler or `None` when unloaded.
+            on_activity (Callable[[], None] | None): Optional callback invoked when the manager records activity (e.g., a request or session interaction).
         """
         self.config_args = config_args
         self._handler = None
@@ -377,6 +376,14 @@ class LazyHandlerManager(ManagerProtocol):
                 # Add a model-specific file sink that only receives records
                 # bound to this model via the `model` extra.
                 def _model_filter(record: dict[str, Any]) -> bool:  # pragma: no cover - tiny helper
+                    """
+                    Determine whether a log record is associated with the current model.
+                    
+                    Checks the record's `extra` mapping for a `model` key and returns `True` when that value equals the enclosing `model_name`, `False` otherwise.
+                    
+                    Returns:
+                        bool: `True` if the record's `extra['model']` equals the manager's `model_name`, `False` otherwise.
+                    """
                     try:
                         extra = record.get("extra", {})
                         if not isinstance(extra, dict):
@@ -494,19 +501,16 @@ class LazyHandlerManager(ManagerProtocol):
             return handler
 
     async def unload(self, reason: str = "manual") -> bool:
-        """Unload the current handler if loaded.
-
-        Cleans up the handler resources and clears memory caches.
-
-        Parameters
-        ----------
-        reason : str, default "manual"
-            Reason for unloading, used in log messages.
-
-        Returns
-        -------
-        bool
-            True if a handler was unloaded, False if none was loaded.
+        """
+        Unload and clean up the currently loaded handler, if any.
+        
+        Performs handler cleanup, clears framework caches, and triggers the on-change callback when a handler is removed.
+        
+        Parameters:
+            reason (str): Human-readable reason for unloading, used in log messages.
+        
+        Returns:
+            bool: `true` if a handler was unloaded, `false` if no handler was loaded.
         """
         if not self._handler:
             return False
@@ -529,9 +533,10 @@ class LazyHandlerManager(ManagerProtocol):
         return True
 
     async def shutdown(self) -> None:
-        """Shutdown the handler manager and unload any loaded handler.
-
-        Sets the shutdown flag and unloads the handler.
+        """
+        Shut down the handler manager and unload any loaded handler.
+        
+        Sets the manager into shutdown state, unloads the currently loaded handler if present, and removes the per-model log sink.
         """
         self._shutdown = True
         await self.unload("shutdown")
@@ -541,7 +546,12 @@ class LazyHandlerManager(ManagerProtocol):
 
     # ManagerProtocol adapter methods -------------------------------------------------
     def is_vram_loaded(self) -> bool:
-        """Return True when the handler is currently loaded into memory/VRAM."""
+        """
+        Indicates whether a handler is currently loaded into memory/VRAM.
+        
+        Returns:
+            `true` if a handler is loaded, `false` otherwise.
+        """
         return self._handler is not None
 
     async def ensure_vram_loaded(
@@ -550,9 +560,15 @@ class LazyHandlerManager(ManagerProtocol):
         force: bool = False,
         timeout: float | None = None,
     ) -> None:
-        """Ensure the handler is loaded (idempotent).
-
-        Maps the ManagerProtocol call onto the existing ``ensure_loaded`` behavior.
+        """
+        Load the handler into VRAM if it is not already loaded.
+        
+        Parameters:
+            force (bool): If True, reload the handler even if one is already present.
+            timeout (float | None): Maximum seconds to wait for loading; if None, wait indefinitely.
+        
+        Raises:
+            RuntimeError: If the manager is shutting down and cannot load a handler.
         """
         if self._shutdown:
             raise RuntimeError("Manager is shutting down")
@@ -565,7 +581,17 @@ class LazyHandlerManager(ManagerProtocol):
                 await coro
 
     async def release_vram(self, *, timeout: float | None = None) -> None:
-        """Release VRAM resources by unloading the handler (idempotent)."""
+        """
+        Ensure the handler is unloaded to free VRAM; safe to call when no handler is loaded.
+        
+        If `timeout` is provided, wait up to `timeout` seconds for the unload to complete.
+        
+        Parameters:
+            timeout (float | None): Maximum seconds to wait for the unload operation; if `None`, wait indefinitely.
+        
+        Raises:
+            asyncio.TimeoutError: If the unload does not complete within the given timeout.
+        """
         coro = self.unload("release_vram")
         if timeout is not None:
             await asyncio.wait_for(coro, timeout=timeout)
@@ -578,16 +604,26 @@ class LazyHandlerManager(ManagerProtocol):
         ensure_vram: bool = True,
         ensure_timeout: float | None = None,
     ) -> AbstractAsyncContextManager[Any]:
-        """Return an async context manager for per-request sessions.
-
-        This adapter notifies activity and optionally ensures VRAM before yielding
-        the manager (self). It is intentionally lightweight because the
-        authoritative active-request counter lives in `ModelRegistry`.
+        """
+        Provide an async context manager for a per-request session that records activity and optionally ensures the handler's VRAM is loaded.
+        
+        Parameters:
+            ensure_vram (bool): If True, ensure the handler's VRAM/memory is loaded before yielding the manager.
+            ensure_timeout (float | None): Maximum number of seconds to wait for VRAM to become available; None means wait indefinitely.
+        
+        Returns:
+            An async context manager that yields the manager instance (`self`). On entry it records activity and (when requested) waits for VRAM; on exit it records activity.
         """
 
         @asynccontextmanager
         async def _session() -> AsyncGenerator[Any, None]:
             # Record activity so central controller timers are reset
+            """
+            Provide an async context manager for a per-request session that records activity and, when configured, ensures the model is loaded into VRAM before yielding.
+            
+            Returns:
+                The manager instance for the request (yielded to the caller).
+            """
             self.record_activity()
 
             if ensure_vram:
@@ -621,27 +657,32 @@ class LazyHandlerManager(ManagerProtocol):
             self._log_sink_id = None
 
     def _format_log_message(self, action: str, reason: str) -> str:
-        """Format a log message with model identifier.
-
-        Parameters
-        ----------
-        action : str
-            The action being performed.
-        reason : str
-            The reason for the action.
-
-        Returns
-        -------
-        str
-            Formatted log message.
+        """
+        Format a log message that prefixes the model identifier to an action and reason.
+        
+        Parameters:
+            action (str): Action being logged (e.g., "loading", "unloading").
+            reason (str): Short reason or context for the action.
+        
+        Returns:
+            str: Message in the form "[<model_type>:<model_path>] <action> (<reason>)".
         """
         identifier = f"{self.config_args.model_type}:{self.config_args.model_path}"
         return f"[{identifier}] {action} ({reason})"
 
     def _schedule_memory_cleanup(self) -> None:
-        """Run cache clearing in the background to avoid blocking requests."""
+        """
+        Schedule a non-blocking background memory cleanup that clears model caches and runs garbage collection.
+        
+        Schedules an asynchronous background task that attempts to clear framework caches and trigger Python garbage collection without blocking the caller. The created task is tracked in self._background_tasks and a completion callback removes it from the set and logs any exception raised by the cleanup.
+        """
 
         async def _run() -> None:
+            """
+            Perform a best-effort background memory cleanup by clearing framework caches and running garbage collection.
+            
+            This function calls the model runtime's cache clear routine and then triggers Python's garbage collector. Failures are caught and logged without raising.
+            """
             try:
                 await asyncio.to_thread(mx.clear_cache)
                 await asyncio.to_thread(gc.collect)
@@ -651,6 +692,14 @@ class LazyHandlerManager(ManagerProtocol):
         task = asyncio.create_task(_run())
 
         def _on_complete(done: asyncio.Task[None]) -> None:
+            """
+            Handle completion of a background memory-cleanup task.
+            
+            Removes the completed task from the background task set and logs a warning if the task raised an exception.
+            
+            Parameters:
+                done (asyncio.Task[None]): The completed background task to process.
+            """
             self._background_tasks.discard(done)
             e = done.exception()
             if e:
@@ -671,6 +720,12 @@ class CentralIdleAutoUnloadController:
     WATCH_LOOP_MAX_WAIT_SECONDS = 5
 
     def __init__(self, registry: ModelRegistry) -> None:
+        """
+        Initialize the CentralIdleAutoUnloadController with a ModelRegistry and prepare internal state for the background watch loop.
+        
+        Parameters:
+            registry (ModelRegistry): Registry used to read model entries and update model state during idle checks.
+        """
         self.registry = registry
         self._event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -679,14 +734,22 @@ class CentralIdleAutoUnloadController:
         self._backoff: dict[str, float] = {}
 
     def start(self) -> None:
-        """Start the central idle auto-unload background task."""
+        """
+        Start the controller's background watch loop.
+        
+        If the controller is already active, this method does nothing.
+        """
         if self._active:
             return
         self._active = True
         self._task = asyncio.create_task(self._watch_loop())
 
     async def stop(self) -> None:
-        """Stop the controller and wait for background task to finish."""
+        """
+        Stop the background watch loop and wait for its task to finish.
+        
+        If the controller is already inactive this is a no-op. Otherwise mark the controller inactive, set the internal wake event to wake the loop, cancel the background task if present, and await its completion while suppressing asyncio.CancelledError.
+        """
         if not self._active:
             return
         self._active = False
@@ -697,9 +760,15 @@ class CentralIdleAutoUnloadController:
                 await self._task
 
     def notify_activity(self, model_id: str) -> None:
-        """Called by the registry when activity occurs or when a model becomes idle.
-
-        The controller uses this to reset timers and wake the watch loop.
+        """
+        Notify the controller that activity occurred for a model and wake the watch loop.
+        
+        This signals the background watch loop to re-check model states. The provided
+        model_id identifies which model triggered the activity but is not read by the
+        controller; the controller will query the registry for current state when woken.
+        
+        Parameters:
+            model_id (str): Identifier of the model that had activity (informational; ignored by caller).
         """
         # model_id is intentionally unused; controller queries registry for current state
         # Wake the loop; controller will query registry for current state
@@ -707,6 +776,11 @@ class CentralIdleAutoUnloadController:
             self._event.set()
 
     async def _watch_loop(self) -> None:
+        """
+        Continuously monitors registered models and triggers VRAM unloads for models idle longer than their configured auto-unload timeout.
+        
+        Polls the ModelRegistry for registered models, skips models currently in per-model backoff or with active requests, and determines idle time using a handler-provided idle metric when available or registry VRAM timestamps otherwise. If a model's idle time meets or exceeds its configured auto-unload minutes and the model is marked as VRAM-loaded, the loop requests a VRAM unload for that model. Failures to unload apply a 30-second backoff for the model to avoid tight error loops. The loop waits on an internal event with a short timeout between iterations and exits cleanly on task cancellation.
+        """
         try:
             while self._active:
                 # Iterate registered models and consider unloading
@@ -836,16 +910,20 @@ def create_lifespan(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-        """FastAPI lifespan that wires the LazyHandlerManager into app state.
-
-        Sets up the handler manager and auto-unload controller during
-        application startup, and performs cleanup during shutdown.
-        Manages the application lifecycle for JIT-aware model loading.
-
-        Parameters
-        ----------
-        app : FastAPI
-            The FastAPI application instance.
+        """
+        Create a FastAPI lifespan context that registers the model, a LazyHandlerManager, and the central auto-unload controller on app.state, and coordinates startup and shutdown lifecycle actions.
+        
+        On startup this lifespan:
+        - Creates and exposes a ModelRegistry and registers the configured model.
+        - Instantiates and stores a LazyHandlerManager on app.state and wires a registry synchronization callback.
+        - Creates a CentralIdleAutoUnloadController, registers its activity notifier with the registry, and wires handler activity into the controller.
+        - Ensures the handler is preloaded when JIT is disabled, starts the central controller, and performs an initial memory cleanup.
+        
+        On shutdown this lifespan:
+        - Stops the central auto-unload controller, shuts down the handler manager, awaits outstanding registry update tasks, and performs a final memory cleanup.
+        
+        Parameters:
+            app (FastAPI): The FastAPI application instance whose state will be populated with registry, handler manager, and controller.
         """
         registry = ModelRegistry()
         app.state.model_registry = registry
@@ -868,6 +946,16 @@ def create_lifespan(
         registry_tasks: set[asyncio.Task[None]] = set()
 
         async def _sync_registry_update(handler: MLXHandler | None) -> None:
+            """
+            Synchronize the given handler's presence and metadata to the ModelRegistry.
+            
+            Updates the registry entry for the configured model with a metadata payload (based on
+            the module's base_registry_metadata plus a `model_path`) and a status of either
+            "initialized" when a handler is provided or "unloaded" when `handler` is None.
+            Registry update failures are logged and suppressed.
+            Parameters:
+                handler (MLXHandler | None): The active handler to publish; pass `None` to mark the model as unloaded.
+            """
             metadata_payload = dict(base_registry_metadata)
             metadata_payload["model_path"] = getattr(
                 handler,
@@ -889,6 +977,14 @@ def create_lifespan(
                 )
 
         def _update_model_metadata(handler: MLXHandler | None) -> None:
+            """
+            Update the application's primary model metadata entry to reflect the handler's loaded state.
+            
+            If a model metadata list is present on app.state under "model_metadata", updates the first entry's "metadata.status" to "initialized" when a handler is provided or "unloaded" when None. When a handler is present, also sets the entry's "created" timestamp from handler.model_created (or current time if missing) and ensures "metadata.model_path" reflects handler.model_path if available.
+             
+            Parameters:
+            	handler (MLXHandler | None): The handler currently loaded for the model, or `None` if no handler is loaded.
+            """
             model_metadata = getattr(app.state, "model_metadata", None)
             if not model_metadata:
                 return
@@ -905,11 +1001,22 @@ def create_lifespan(
                 )
 
         def _update_handler(handler: MLXHandler | None) -> None:
+            """
+            Update the application's active handler, refresh related model metadata, and schedule a background registry synchronization.
+            
+            This function assigns the provided handler to app.state.handler, triggers an update of the model metadata derived from that handler, and creates an asyncio task to synchronize the model state with the central registry. The created task is tracked in the registry_tasks set and any exception raised by the task is logged when it completes.
+            """
             app.state.handler = handler
             _update_model_metadata(handler)
             task = asyncio.create_task(_sync_registry_update(handler))
 
             def _cleanup(done: asyncio.Task[None]) -> None:
+                """
+                Handle completion of a registry update task by removing it from the tracking set and logging any exception.
+                
+                Parameters:
+                    done (asyncio.Task[None]): The completed registry update task; if it raised, its exception will be logged.
+                """
                 registry_tasks.discard(done)
                 e = done.exception()
                 if e:
@@ -973,24 +1080,16 @@ def create_lifespan(
 
 
 def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
-    """Create and configure the FastAPI app and return a Uvicorn config.
-
-    This function sets up logging, constructs the FastAPI application with
-    a configured lifespan, registers routes and middleware, and returns a
-    :class:`uvicorn.Config` ready to be used to run the server.
-
-    Parameters
-    ----------
-    config_args : MLXServerConfig
-        Configuration object usually produced by the CLI. Expected
-        to have attributes like ``host``, ``port``, ``log_level``,
-        and logging-related fields.
-
-    Returns
-    -------
-    uvicorn.Config
-        A configuration object that can be passed to
-        ``uvicorn.Server(config).run()`` to start the application.
+    """
+    Create and configure a FastAPI application and produce a uvicorn.Config for running the server.
+    
+    Configures logging, constructs the FastAPI app with a lifespan that initializes model registry and handler management, registers routes and middleware, and stores server configuration and initial model metadata on app.state.
+    
+    Parameters:
+        config_args (MLXServerConfig): Server configuration (typically from the CLI) containing host, port, log settings, model identifier/type, JIT and unload settings, and concurrency/timeouts.
+    
+    Returns:
+        uvicorn.Config: A configuration object ready to run the created FastAPI application.
     """
     # Configure logging based on CLI parameters
     configure_logging(
@@ -1038,11 +1137,12 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
 
 
 def configure_fastapi_app(app: FastAPI) -> None:
-    """Register routers, middleware, and global handlers on ``app``.
-
-    This helper centralizes FastAPI configuration that is shared between the
-    standard single-model server and the hub-aware server so both surfaces
-    expose identical middleware, routing, and error handling behavior.
+    """
+    Register routes, middleware, and global handlers onto the given FastAPI application.
+    
+    This centralizes common app wiring (API router, CORS and request-tracking middleware,
+    hub registry background sync, startup/shutdown hooks, timing middleware, and a
+    global exception handler) so multiple server entrypoints share identical behavior.
     """
     app.include_router(router)
     # Ensure a ModelRegistry is available on the application state so
@@ -1091,7 +1191,11 @@ def configure_fastapi_app(app: FastAPI) -> None:
             await asyncio.sleep(interval)
 
     def _start_hub_sync_task() -> None:
-        """Start background hub sync task on application startup."""
+        """
+        Start the background hub sync loop and record its task on app.state.
+        
+        If a hub sync task is already present on app.state.hub_sync_task, this function does nothing; otherwise it schedules _hub_registry_sync_loop(app) on the current event loop and stores the created Task on app.state.hub_sync_task.
+        """
         # Avoid starting multiple tasks
         if getattr(app.state, "hub_sync_task", None) is not None:
             return
@@ -1100,7 +1204,11 @@ def configure_fastapi_app(app: FastAPI) -> None:
         app.state.hub_sync_task = task
 
     def _stop_hub_sync_task() -> None:
-        """Cancel the hub sync background task on shutdown."""
+        """
+        Cancel the app's hub sync background task if it exists.
+        
+        Performs a best-effort cancellation; if cancellation fails the error is logged at debug level.
+        """
         task = getattr(app.state, "hub_sync_task", None)
         if task is None:
             return
@@ -1117,7 +1225,14 @@ def configure_fastapi_app(app: FastAPI) -> None:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        """Attach timing metadata and trigger periodic memory cleanup."""
+        """
+        Add an X-Process-Time response header and perform periodic memory cleanup.
+        
+        Increments app.state.request_count for the application; when the count is divisible by 50, clears the MX cache and runs Python garbage collection, and logs that a cleanup occurred.
+        
+        Returns:
+            Response: The response returned for the request, with an 'X-Process-Time' header containing the request processing time in seconds.
+        """
         start_time = time.time()
         response = await call_next(request)
         process_time = time.time() - start_time

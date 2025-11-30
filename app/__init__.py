@@ -15,6 +15,18 @@ class _SuppressMlxVlmFilter(_std_logging.Filter):
     """
 
     def filter(self, record: _std_logging.LogRecord) -> bool:
+        """
+        Suppress a specific noisy startup banner emitted by the mlx_vlm package.
+        
+        Examines the provided LogRecord; if its logger name starts with "mlx_vlm" and its rendered message contains
+        "This is a beta version of the video understanding", the record is suppressed.
+        
+        Parameters:
+            record (_std_logging.LogRecord): Log record to inspect.
+        
+        Returns:
+            bool: `False` if the record matches the mlx_vlm beta-banner message (suppress it), `True` otherwise.
+        """
         try:
             name = getattr(record, "name", "")
             msg = record.getMessage() if hasattr(record, "getMessage") else str(record.msg)

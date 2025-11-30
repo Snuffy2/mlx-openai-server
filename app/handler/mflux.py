@@ -51,15 +51,17 @@ class MLXFluxHandler:
         lora_scales: list[float] | None = None,
     ) -> None:
         """
-        Initialize the handler with the specified model path.
-
-        Args:
-            model_path (str): Path to the model directory, model name, or Hugging Face repository ID (e.g., 'blackforestlabs/FLUX.1-dev').
-            max_concurrency (int): Maximum number of concurrent model inference tasks.
-            quantize (int): Quantization level for the model.
-            config_name (str): Model config name (flux-schnell, flux-dev, etc.).
-            lora_paths (list[str] | None): Optional list of LoRA adapter paths. Defaults to None (no LoRA adapters used).
-            lora_scales (list[float] | None): Optional list of LoRA scales. Defaults to None (no LoRA adapters used).
+        Create and configure an MLXFluxHandler for the given model and runtime options.
+        
+        Loads the specified FluxModel, records the model creation time, and initializes the request queue used for concurrent image generation requests.
+        
+        Parameters:
+            model_path: Path, model name, or Hugging Face repository ID identifying the model to load.
+            max_concurrency: Maximum number of concurrent model inference tasks allowed by the internal request queue.
+            quantize: Quantization level to use when loading the model.
+            config_name: Model configuration name (for example, "flux-schnell" or "flux-dev").
+            lora_paths: Optional list of LoRA adapter paths to apply to the model; use None to disable LoRA adapters.
+            lora_scales: Optional list of scales corresponding to `lora_paths`; use None to apply default scales or when `lora_paths` is None.
         """
         self.model_path = model_path
         self.quantize = quantize
@@ -89,7 +91,16 @@ class MLXFluxHandler:
             logger.info(f"Using LoRA adapters: {lora_paths} with scales: {lora_scales}")
 
     async def get_models(self) -> list[dict[str, Any]]:
-        """Get list of available models with their metadata."""
+        """
+        List available model entries describing the loaded model.
+        
+        Returns:
+            list[dict[str, Any]]: A list of dictionaries containing model metadata with keys:
+                - `id`: model path or identifier
+                - `object`: the object type (`"model"`)
+                - `created`: model creation timestamp
+                - `owned_by`: owner identifier (`"local"`)
+        """
         return [
             {
                 "id": self.model_path,
@@ -100,7 +111,17 @@ class MLXFluxHandler:
         ]
 
     async def initialize(self, queue_config: dict[str, Any] | None = None) -> None:
-        """Initialize the handler and start the request queue."""
+        """
+        Set up or reconfigure the request queue and start its worker.
+        
+        If queue_config is omitted, the current request queue defaults are used. Accepted keys in queue_config:
+        - "max_concurrency": maximum number of concurrent worker tasks.
+        - "timeout": per-request timeout in seconds.
+        - "queue_size": maximum number of queued requests.
+        
+        Parameters:
+            queue_config (dict[str, Any] | None): Optional configuration for the request queue.
+        """
         if not queue_config:
             queue_config = {
                 "max_concurrency": self.request_queue.max_concurrency,
@@ -123,16 +144,15 @@ class MLXFluxHandler:
 
     async def generate_image(self, request: ImageGenerationRequest) -> ImageGenerationResponse:
         """
-        Generate an image based on the request parameters.
-
-        Uses the request queue for handling concurrent requests.
-
-        Args:
-            request: ImageGenerationRequest object containing the generation parameters.
-
-        Returns
-        -------
-            ImageGenerationResponse: Response containing the generated image data.
+        Generate an image from the provided generation parameters.
+        
+        Submits the request to the internal processing queue and returns a response containing the generated image encoded as a base64 PNG.
+        
+        Parameters:
+            request (ImageGenerationRequest): Object with generation fields (prompt, negative_prompt, steps, seed, guidance_scale, size). If `size` is omitted, a default of 1024x1024 is used.
+        
+        Returns:
+            ImageGenerationResponse: Response with a `created` timestamp and a `data` list containing an ImageData entry whose `b64_json` field holds the base64-encoded PNG.
         """
         request_id = f"image-{uuid.uuid4()}"
 
@@ -189,18 +209,16 @@ class MLXFluxHandler:
 
     async def edit_image(self, image_edit_request: ImageEditRequest) -> ImageEditResponse:
         """
-        Edit an image based on the request parameters.
-
-        Args:
-            image_edit_request: Request parameters for image editing
-
-        Returns
-        -------
-            ImageEditResponse: Response containing the edited image data
-
-        Raises
-        ------
-            HTTPException: For validation errors, queue capacity issues, or processing failures
+        Edit the provided image according to the parameters in the ImageEditRequest and return the edited image data.
+        
+        Parameters:
+            image_edit_request (ImageEditRequest): Request containing the input image file, prompt, and optional edit parameters (size, steps, seed, negative_prompt, guidance_scale).
+        
+        Returns:
+            ImageEditResponse: Response containing the edited image as a base64-encoded PNG in data[0].b64_json and a creation timestamp.
+        
+        Raises:
+            HTTPException: For validation errors (invalid file type, empty/corrupted image, oversized file, empty prompt), when the request queue is at capacity, or on internal processing failures.
         """
         image = image_edit_request.image
         # Validate image file type and size
@@ -370,14 +388,21 @@ class MLXFluxHandler:
 
     async def _process_request(self, request_data: dict[str, Any]) -> Image.Image:
         """
-        Process an image generation request. This is the worker function for the request queue.
-
-        Args:
-            request_data: Dictionary containing the request data.
-
-        Returns
-        -------
-            Image.Image: The generated PIL Image.
+        Process a single image generation or edit request from the queue and return the produced PIL Image.
+        
+        Parameters:
+            request_data (dict): Request parameters. Expected keys:
+                - prompt (str): Text prompt for generation.
+                - negative_prompt (str | None): Negative prompt to steer away from.
+                - steps (int): Number of inference steps.
+                - seed (int): Random seed for reproducibility.
+                - width (int): Output image width in pixels.
+                - height (int): Output image height in pixels.
+                - image_path (str | None): Path to an input image for editing.
+                - guidance_scale (float): Guidance/conditioning strength.
+        
+        Returns:
+            Image.Image: The generated or edited PIL Image.
         """
         try:
             # Extract request parameters

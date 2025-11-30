@@ -70,6 +70,18 @@ class ImageProcessor(BaseProcessor):
         image: Image.Image,
         max_size: int = 448,
     ) -> Image.Image:
+        """
+        Resize an image so its larger dimension does not exceed max_size while preserving aspect ratio.
+        
+        If both width and height are already less than or equal to max_size, the original image is returned unchanged.
+        
+        Parameters:
+            image (PIL.Image.Image): Source image to resize.
+            max_size (int): Maximum allowed size (pixels) for the image's larger dimension.
+        
+        Returns:
+            PIL.Image.Image: The resized image, or the original image if no resizing was needed.
+        """
         width, height = image.size
         if width <= max_size and height <= max_size:
             return image
@@ -98,7 +110,17 @@ class ImageProcessor(BaseProcessor):
         return image
 
     def _process_media_data(self, data: bytes, cached_path: str, **kwargs: Any) -> str:
-        """Process image data and save to cached path."""
+        """
+        Process raw image bytes, optionally resize, prepare for saving as an RGB PNG, write the file to the given cache path, and trigger cache cleanup.
+        
+        Parameters:
+            data (bytes): Raw image file bytes to process.
+            cached_path (str): Filesystem path where the processed PNG will be written.
+            resize (bool, optional): If True (default), resize the image to fit the configured maximum while preserving aspect ratio. Provided via kwargs.
+        
+        Returns:
+            str: The path to the saved cached image.
+        """
         image = None
         resize = kwargs.get("resize", True)
         try:
@@ -117,7 +139,15 @@ class ImageProcessor(BaseProcessor):
                     image.close()
 
     async def process_image_url(self, image_url: str, *, resize: bool = True) -> str:
-        """Process a single image URL and return path to cached file."""
+        """
+        Process an image URL, cache the resulting PNG file, and return the cached file path.
+        
+        Parameters:
+            resize (bool): If True, the image will be resized to fit within the processor's maximum size before saving.
+        
+        Returns:
+            cached_path (str): Filesystem path to the saved cached image.
+        """
         return await self._process_single_media(image_url, resize=resize)
 
     async def process_image_urls(
@@ -126,7 +156,16 @@ class ImageProcessor(BaseProcessor):
         *,
         resize: bool = True,
     ) -> list[str | BaseException]:
-        """Process multiple image URLs and return paths to cached files (exceptions may be BaseException)."""
+        """
+        Process a batch of image URLs and cache each image locally.
+        
+        Parameters:
+            image_urls (list[str]): Iterable of image URLs to process.
+            resize (bool): When True, resize each image according to the processor's resizing policy.
+        
+        Returns:
+            list[str | BaseException]: A list where each element is the path to the cached file for a successfully processed URL, or a `BaseException` instance for a URL that failed.
+        """
         tasks = [self.process_image_url(url, resize=resize) for url in image_urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         # Force garbage collection after batch processing

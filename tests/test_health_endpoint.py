@@ -31,6 +31,22 @@ def _build_state(
     handler: _DummyHandler | None,
     registry: object | None = None,
 ) -> SimpleNamespace:
+    """
+    Create a lightweight application state object used by tests.
+    
+    Parameters:
+        handler_manager (_DummyHandlerManager | None): Manager that may hold a current model handler; use None to simulate absence.
+        handler (_DummyHandler | None): Currently active handler instance or None if no handler is loaded.
+        registry (object | None): Optional registry object to include on the state; use None to simulate missing registry.
+    
+    Returns:
+        SimpleNamespace: A state object with attributes:
+            - handler_manager: the provided handler_manager
+            - handler: the provided handler
+            - server_config: SimpleNamespace with `model_identifier` set to "test-model"
+            - model_metadata: list containing a single metadata entry describing the test model (id "test-model")
+            - registry: the provided registry value
+    """
     metadata_entry = {
         "id": "test-model",
         "object": "model",

@@ -65,6 +65,18 @@ class ModelRegistry:
     """
 
     def __init__(self) -> None:
+        """
+        Initialize an asyncio-safe registry for model managers, metadata, and per-model VRAM/runtime state.
+        
+        Sets up:
+        - a mapping of model IDs to attached manager instances (or None),
+        - stored ModelMetadata for each model,
+        - a dynamic per-model extras dictionary for VRAM/runtime keys (common keys documented by `VRAMStatus`, but arbitrary runtime keys such as `_loading_task` may be present),
+        - an asyncio.Lock for synchronizing registry mutations,
+        - an optional synchronous activity notifier callable that receives a `model_id`.
+        
+        No return value.
+        """
         self._handlers: dict[str, ManagerProtocol | None] = {}
         self._metadata: dict[str, ModelMetadata] = {}
         # Per-model VRAM/runtime metadata stored for admin/UI surfaces.
@@ -77,10 +89,12 @@ class ModelRegistry:
         logger.info("Model registry initialized")
 
     def register_activity_notifier(self, notifier: Callable[[str], None]) -> None:
-        """Register a synchronous notifier called when active request counts change.
-
-        The notifier should be a lightweight callable (e.g., controller.notify_activity)
-        that accepts a single `model_id` string argument.
+        """
+        Register a synchronous notifier invoked when a model's active request count changes.
+        
+        Parameters:
+            notifier (Callable[[str], None]): A lightweight callable that will be called with the `model_id`
+                string whenever the active request count for that model changes.
         """
         self._activity_notifier = notifier
 
@@ -92,20 +106,22 @@ class ModelRegistry:
         context_length: int | None = None,
         metadata_extras: dict[str, Any] | None = None,
     ) -> None:
-        """Register a model handler with metadata.
-
-        Parameters
-        ----------
-        model_id
-            Unique model identifier used by the registry and endpoints.
-        handler
-            Optional pre-attached manager/handler instance (or ``None``).
-        model_type
-            Human-friendly model type string.
-        context_length
-            Optional context length reported in metadata.
-        metadata_extras
-            Optional dictionary of additional metadata to merge.
+        """
+        Register a model in the registry and initialize its metadata.
+        
+        Registers a model identifier with an optional pre-attached manager, creates
+        ModelMetadata (including creation timestamp), and initializes VRAM- and runtime-
+        related metadata under the registry's internal stores.
+        
+        Parameters:
+            model_id: Unique identifier for the model used by the registry and external endpoints.
+            handler: Optional manager/handler instance to attach immediately, or `None` if not attached.
+            model_type: Human-readable model type string (used in exposed metadata).
+            context_length: Optional context length to include in the model metadata.
+            metadata_extras: Optional mapping of additional metadata keys to merge into the model's metadata.
+        
+        Raises:
+            ValueError: If `model_id` is already registered.
         """
         if model_id in self._handlers:
             raise ValueError(f"Model '{model_id}' is already registered")
@@ -147,19 +163,17 @@ class ModelRegistry:
         status: str | None = None,
         metadata_updates: dict[str, Any] | None = None,
     ) -> None:
-        """Update handler attachment and metadata for a registered model.
-
-        Parameters
-        ----------
-        model_id
-            Registered model identifier.
-        handler
-            New handler to attach (or ``None``). Use ``_UNSET`` to leave
-            the handler unchanged.
-        status
-            Optional status string to record in the model extras.
-        metadata_updates
-            Optional dict of extra metadata to merge into ``_extra[model_id]``.
+        """
+        Update the attached manager and merge extra metadata for a registered model.
+        
+        Parameters:
+            model_id (str): Registered model identifier.
+            handler (ManagerProtocol | None | object): Manager to attach, `None` to detach, or the sentinel `_UNSET` to leave the handler unchanged.
+            status (str | None): Optional status string to set in the model's extra metadata.
+            metadata_updates (dict[str, Any] | None): Optional mapping of extra metadata to merge into the model's runtime extras.
+        
+        Raises:
+            KeyError: If `model_id` is not registered in the registry.
         """
         async with self._lock:
             if model_id not in self._metadata:
@@ -196,7 +210,15 @@ class ModelRegistry:
                 entry["status"] = status
 
     async def unregister_model(self, model_id: str) -> None:
-        """Remove a model from the registry."""
+        """
+        Unregisters a model and removes all associated metadata and runtime state from the registry.
+        
+        Parameters:
+            model_id (str): Identifier of the model to remove.
+        
+        Raises:
+            KeyError: If the model_id is not registered.
+        """
         async with self._lock:
             if model_id not in self._handlers:
                 raise KeyError(f"Model '{model_id}' not found in registry")
@@ -207,13 +229,28 @@ class ModelRegistry:
             logger.info(f"Unregistered model: {model_id}")
 
     def get_handler(self, model_id: str) -> ManagerProtocol | None:
-        """Return the handler bound to ``model_id`` (may be ``None``)."""
+        """
+        Retrieve the manager attached to the given model ID.
+        
+        Returns:
+            The attached `ManagerProtocol` instance, or `None` if no manager is attached.
+        
+        Raises:
+            KeyError: If `model_id` is not registered in the registry.
+        """
         if model_id not in self._handlers:
             raise KeyError(f"Model '{model_id}' not found in registry")
         return self._handlers[model_id]
 
     def list_models(self) -> list[dict[str, Any]]:
-        """Return OpenAI-compatible metadata for registered models."""
+        """
+        List registered models as OpenAI-compatible metadata dictionaries.
+        
+        Each dictionary contains the keys "id", "object", "created", and "owned_by". If extra metadata exists for a model, it is included under the optional "metadata" key.
+        
+        Returns:
+            list[dict[str, Any]]: A list of model metadata dictionaries.
+        """
         output: list[dict[str, Any]] = []
         for mid, metadata in self._metadata.items():
             entry: dict[str, Any] = {
@@ -229,7 +266,18 @@ class ModelRegistry:
         return output
 
     def get_metadata(self, model_id: str) -> ModelMetadata:
-        """Return the stored metadata for ``model_id``."""
+        """
+        Retrieve the stored ModelMetadata for a registered model.
+        
+        Parameters:
+            model_id (str): The identifier of the model.
+        
+        Returns:
+            ModelMetadata: The metadata associated with `model_id`.
+        
+        Raises:
+            KeyError: If `model_id` is not registered in the registry.
+        """
         if model_id not in self._metadata:
             raise KeyError(f"Model '{model_id}' not found in registry")
         return self._metadata[model_id]
@@ -241,28 +289,20 @@ class ModelRegistry:
         *,
         timeout: float | None = None,
     ) -> ManagerProtocol:
-        """Return (and attach if necessary) a manager object for ``model_id``.
-
-        Parameters
-        ----------
-        model_id : str
-            Registered model identifier.
-        loader : Callable[[str], Awaitable[ManagerProtocol]]
-            Async callable that accepts ``model_id`` and returns a manager instance.
-        timeout : float | None, optional
-            Optional timeout (seconds) to wait for the loader task.
-
-        Returns
-        -------
-        ManagerProtocol
-            The attached or newly created manager instance.
-
-        Raises
-        ------
-        KeyError
-            If the model is not registered.
-        RuntimeError
-            If the loader fails to produce a manager.
+        """
+        Get the manager for the given model, attaching and awaiting the provided loader if no manager is currently attached.
+        
+        Parameters:
+            model_id (str): Registered model identifier.
+            loader (Callable[[str], Awaitable[ManagerProtocol]]): Async callable that accepts `model_id` and returns a manager instance; used when no manager is attached.
+            timeout (float | None): Optional timeout in seconds to wait for the loader task.
+        
+        Returns:
+            ManagerProtocol: The attached or newly created manager instance.
+        
+        Raises:
+            KeyError: If `model_id` is not registered.
+            Exception: Any exception raised by the loader is propagated after recording the load error in the model's metadata.
         """
         async with self._lock:
             if model_id not in self._handlers:
@@ -314,23 +354,19 @@ class ModelRegistry:
         force: bool = False,
         timeout: float | None = None,
     ) -> None:
-        """Request that the attached manager load model weights into VRAM.
-
-        Parameters
-        ----------
-        model_id : str
-            Registered model identifier.
-        force : bool, default False
-            If True, force a reload even if the model is already marked loaded.
-        timeout : float | None, optional
-            Optional timeout (seconds) to wait for the manager operation.
-
-        Raises
-        ------
-        KeyError
-            If the model is not registered or no manager is attached.
-        RuntimeError
-            If the manager's load operation fails.
+        """
+        Request the attached manager to load the model's weights into VRAM.
+        
+        Calls the model's manager to ensure weights are resident in VRAM and updates the registry's VRAM metadata on success.
+        
+        Parameters:
+            model_id (str): Registered model identifier.
+            force (bool): If True, force a reload even when the model is already marked loaded.
+            timeout (float | None): Maximum seconds to wait for the manager operation; no timeout if None.
+        
+        Raises:
+            KeyError: If the model is not registered or no manager is attached.
+            RuntimeError: If the manager's load operation fails.
         """
         async with self._lock:
             if model_id not in self._handlers:
@@ -356,21 +392,15 @@ class ModelRegistry:
             entry.pop("vram_load_error", None)
 
     async def request_vram_unload(self, model_id: str, *, timeout: float | None = None) -> None:
-        """Request that the attached manager release VRAM resources (unload).
-
-        Parameters
-        ----------
-        model_id : str
-            Registered model identifier.
-        timeout : float | None, optional
-            Optional timeout (seconds) to wait for the manager operation.
-
-        Raises
-        ------
-        KeyError
-            If the model is not registered or no manager is attached.
-        RuntimeError
-            If the manager's unload operation fails.
+        """
+        Request that the attached manager release the model's VRAM resources.
+        
+        Parameters:
+            model_id (str): Registered model identifier.
+            timeout (float | None): Optional timeout in seconds to wait for the manager operation.
+        
+        Raises:
+            KeyError: If the model is not registered or no manager is attached.
         """
         async with self._lock:
             if model_id not in self._handlers:
@@ -402,32 +432,34 @@ class ModelRegistry:
         ensure_vram: bool = True,
         ensure_timeout: float | None = None,
     ) -> AbstractAsyncContextManager[ManagerProtocol]:
-        """Async context manager for a per-request handler session.
-
-        Parameters
-        ----------
-        model_id : str
-            Registered model identifier.
-        ensure_vram : bool, default True
-            If True, ensures VRAM residency by calling the manager's
-            ``ensure_vram_loaded`` before yielding the manager.
-        ensure_timeout : float | None, optional
-            Timeout for the manager's ensure_vram call.
-
-        Yields
-        ------
-        ManagerProtocol
-            The attached manager instance for the duration of the request.
-
-        Notes
-        -----
-        The registry increments the ``active_requests`` counter on entry and
-        decrements it on exit; when it drops to zero the configured activity
-        notifier (if any) is invoked so the auto-unload controller can act.
+        """
+        Provide an async context manager that yields the model's attached manager for the duration of a single request session.
+        
+        Parameters:
+            model_id (str): Registered model identifier.
+            ensure_vram (bool): If True, ensure the manager has loaded model weights into VRAM before yielding.
+            ensure_timeout (float | None): Optional timeout, in seconds, applied to the manager's VRAM ensure call.
+        
+        Yields:
+            ManagerProtocol: The attached manager instance for the duration of the context.
+        
+        Returns:
+            An async context manager that yields the manager for a request session.
+        
+        Notes:
+            The registry increments the per-model `active_requests` counter on entry and decrements it on exit. When `active_requests` drops to zero the configured activity notifier (if any) is invoked.
         """
 
         @asynccontextmanager
         async def _session() -> AsyncIterator[Any]:
+            """
+            Create an async context for a model handler session that tracks active requests, optionally ensures model VRAM is loaded, and yields the attached manager.
+            
+            On entry, increments the model's active request count and updates the last-request timestamp; calls the registered activity notifier (if any). If the model is not registered, raises KeyError. If no manager is attached, decrements the active request count and raises KeyError. If VRAM should be ensured, waits for the manager to load weights before yielding. On exit, decrements the active request count and, if it drops to zero, calls the activity notifier. Exceptions raised by the notifier are caught and logged.
+            
+            Returns:
+                The attached manager for the requested model (yielded to the caller).
+            """
             async with self._lock:
                 if model_id not in self._handlers:
                     raise KeyError(f"Model '{model_id}' not found in registry")
@@ -474,18 +506,20 @@ class ModelRegistry:
         return _session()
 
     def get_vram_status(self, model_id: str) -> dict[str, Any]:
-        """Return VRAM-related status fields for ``model_id``.
-
-        Parameters
-        ----------
-        model_id : str
-            Registered model identifier.
-
-        Returns
-        -------
-        dict[str, Any]
-            Dictionary containing the keys: ``vram_loaded``, ``vram_last_load_ts``,
-            ``vram_last_unload_ts``, ``vram_last_request_ts``, ``vram_load_error``, and ``active_requests``.
+        """
+        Get VRAM-related status for the specified model.
+        
+        Returns a dictionary with the keys: `vram_loaded`, `vram_last_load_ts`, `vram_last_unload_ts`,
+        `vram_last_request_ts`, `vram_load_error`, and `active_requests`.
+        
+        Parameters:
+            model_id (str): Registered model identifier.
+        
+        Returns:
+            dict[str, Any]: VRAM status fields for the model.
+        
+        Raises:
+            KeyError: If `model_id` is not registered in the registry.
         """
         if model_id not in self._extra:
             raise KeyError(f"Model '{model_id}' not found in registry")
@@ -500,9 +534,19 @@ class ModelRegistry:
         }
 
     def has_model(self, model_id: str) -> bool:
-        """Return ``True`` when the model is registered."""
+        """
+        Check whether a model identifier is registered in the registry.
+        
+        Returns:
+            `True` if the given `model_id` is registered, `False` otherwise.
+        """
         return model_id in self._handlers
 
     def get_model_count(self) -> int:
-        """Return how many models are registered."""
+        """
+        Get the number of registered models.
+        
+        Returns:
+            count (int): Number of models currently registered in the registry.
+        """
         return len(self._handlers)

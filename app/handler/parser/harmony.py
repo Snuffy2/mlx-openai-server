@@ -75,16 +75,17 @@ class HarmonyParser:
 
     def parse_stream(self, text: str | None = None) -> tuple[Any | None, bool]:
         """
-        Parse streaming text input and return parsing state and extracted content.
-
-        Args:
-            text: The text chunk to parse, or None for empty chunks
-
-        Returns
-        -------
-            Tuple[parsed_content, is_complete]:
-                - parsed_content: The parsed chunk (could be str, dict, or None)
-                - is_complete: True if stream has ended
+        Parse a streaming chunk of assistant output and extract channeled content or tool call information.
+        
+        Processes a single text chunk (which may be a token sequence or an end-of-stream marker), updates internal parser state and accumulators, and returns the parsed payload for the current channel along with whether the overall stream has ended.
+        
+        Parameters:
+            text (str | None): A chunk of streamed text to parse. If equal to the parser's end-tool marker, the stream is marked ended; if None or empty, no progress is made.
+        
+        Returns:
+            tuple[Any | None, bool]:
+                - The parsed content for the current channel: a dict for analysis/tool commentary, a string for final content, or None if nothing was produced.
+                - A boolean that is True when the stream has been marked ended, False otherwise.
         """
         # Handle end of stream marker
         if text == self.end_tool_chunk:
@@ -182,17 +183,20 @@ class HarmonyParser:
         content_data: dict[str, Any],
     ) -> tuple[dict[str, Any] | str | None, bool]:
         """
-        Build the appropriate response based on the current channel.
-
-        Args:
-            current_channel: The current harmony channel being processed
-            content_data: Dictionary containing extracted content from different sources
-
-        Returns
-        -------
-            Tuple[parsed_content, is_complete]:
-                - parsed_content: The parsed content (str or dict)
-                - is_complete: Whether the stream has ended
+        Constructs a parsed response object from accumulated content for the given channel.
+        
+        Parameters:
+            current_channel (str | None): The harmony channel currently being processed (e.g., "analysis", "commentary", "final").
+            content_data (dict[str, Any]): Extracted fragments for the channel; expected keys vary by channel:
+                - "reasoning_content": list[str] for analysis channel
+                - "function_name" and "function_arguments": for commentary channel
+                - "contents": list[str] for final channel
+        
+        Returns:
+            tuple[dict[str, Any] | str | None, bool]:
+                parsed_content: For the analysis channel, a dict {"reasoning_content": <str>}; for the commentary channel, a dict with optional
+                    "name" and "arguments"; for the final channel, a concatenated string of content. Returns `None` if there is no response to produce.
+                is_complete: `True` if the stream has been marked ended, `False` otherwise.
         """
         if not current_channel:
             return None, self.end_stream
@@ -252,21 +256,22 @@ class HarmonyParser:
 
     def parse(self, text: str) -> dict[str, Any]:
         """
-        Parse complete text response and extract structured content.
-
-        This method processes the entire text at once (non-streaming) and extracts
-        reasoning content, tool calls, and final content based on harmony channels.
-        Parsing errors are logged and partial results are returned when possible.
-
-        Args:
-            text: The complete text response to parse
-
-        Returns
-        -------
-            Dictionary containing parsed content with keys:
-            - reasoning_content: Analysis/thinking content
-            - tool_calls: List of tool call objects
-            - content: Final response content
+        Parse a complete Harmony-encoded assistant response and extract structured channels.
+        
+        Parses the provided full response text (non-streaming) into three possible outputs:
+        reasoning content from the analysis channel, tool call(s) from the commentary channel,
+        and final assistant content from the final channel. Partial results are returned when
+        individual message parsing errors occur; unexpected top-level errors are logged and
+        partial results are preserved.
+        
+        Parameters:
+            text (str): The complete response text to parse.
+        
+        Returns:
+            dict[str, Any]: A dictionary with keys:
+                - "reasoning_content": extracted analysis text or None,
+                - "tool_calls": list of tool call objects (each with "name" and "arguments") or None,
+                - "content": extracted final response text or None.
         """
         # Initialize result structure
         result: dict[str, Any] = {"reasoning_content": None, "tool_calls": None, "content": None}

@@ -154,7 +154,25 @@ def test_handle_stream_response_edge_cases(
     chunk_sequence: list[object],
     expectation: dict[str, object],
 ) -> None:
-    """Cover misc stream edge cases via parameterized scenarios."""
+    """
+    Run parameterized edge-case scenarios against the streaming response handler.
+    
+    This test feeds a provided sequence of raw stream chunks into the streaming
+    handler and asserts that the produced payloads satisfy the supplied
+    expectations. The expectation dict may include:
+    - "contains_text" (str): expected content string to appear in a
+      'chat.completion.chunk' choice delta.
+    - "final_usage" (dict): expected token counts (e.g., {"prompt_tokens": 1})
+      to match the usage object in the final payload.
+    - "expect_error_substring" (str): substring expected to appear in an error
+      payload's message.
+    
+    Parameters:
+        chunk_sequence (list[object]): Sequence of values yielded by the fake
+            stream generator; values are interpreted as the raw streamed chunks.
+        expectation (dict[str, object]): Assertions to apply to the collected
+            payloads as described above.
+    """
 
     async def fake_generator() -> AsyncGenerator[object, None]:
         for chunk in chunk_sequence:

@@ -43,6 +43,12 @@ class MLX_Whisper:
     """
 
     def __init__(self, model_path: str) -> None:
+        """
+        Initialize the MLX_Whisper wrapper with the model identifier or local path.
+        
+        Parameters:
+            model_path (str): Local filesystem path or Hugging Face repository identifier for the Whisper model used for transcription.
+        """
         self.model_path = model_path
 
     def _transcribe_generator(
@@ -50,7 +56,20 @@ class MLX_Whisper:
         audio_path: str,
         **kwargs: Any,
     ) -> Generator[dict[str, Any], None, None]:
-        """Stream transcription by processing audio in larger chunks."""
+        """
+        Stream the audio file as sequential CHUNK_SIZE-second segments and yield transcription results for each segment.
+        
+        Each yielded dictionary contains the transcription fields produced by the underlying transcribe call, with two additional keys:
+        - `chunk_start` (float): segment start time in seconds.
+        - `chunk_end` (float): segment end time in seconds.
+        
+        Parameters:
+            audio_path (str): Path to the audio file to transcribe.
+            **kwargs: Passed through to the underlying `transcribe` call.
+        
+        Returns:
+            Generator[dict[str, Any], None, None]: Generator that yields transcription dictionaries for each audio segment.
+        """
         # Load the audio file
         audio = load_audio(audio_path)
         duration = calculate_audio_duration(audio_path)
@@ -83,12 +102,17 @@ class MLX_Whisper:
         **kwargs: Any,
     ) -> Generator[dict[str, Any], None, None] | dict[str, Any]:
         """
-        Transcribe audio file.
-
-        Args:
-            audio_path: Path to audio file
-            stream: If True, yields chunks. If False, transcribes entire file at once.
-            **kwargs: Additional arguments passed to transcribe()
+        Transcribe an audio file either as a single result or as a generator of chunked results.
+        
+        Parameters:
+            audio_path (str): Path to the audio file to transcribe.
+            stream (bool): If True, return a generator that yields transcription dictionaries for fixed-size time chunks; if False, return a single transcription dictionary for the whole file.
+            **kwargs: Additional keyword arguments forwarded to the underlying transcribe() call.
+        
+        Returns:
+            Generator[dict[str, Any], None, None] | dict[str, Any]:
+                - If `stream` is True: a generator that yields transcription dictionaries for each chunk. Each chunk dict includes `chunk_start` and `chunk_end` timestamps plus the transcription fields produced by transcribe().
+                - If `stream` is False: a single transcription dictionary for the full audio. The returned dict will include a `duration` key if not already present.
         """
         if stream:
             return self._transcribe_generator(audio_path, **kwargs)

@@ -52,6 +52,21 @@ class ModelConfiguration:
         lora_scales: list[float] | None = None,
     ) -> None:
         # Validate quantization level
+        """
+        Create a configuration container for a Flux model and validate provided options.
+        
+        Parameters:
+            model_type (str): Identifier for the model variant (e.g., "schnell", "dev", "kontext").
+            model_config (ModelConfig | None): Optional model-specific configuration object; may be None for types that don't use it.
+            quantize (int): Quantization level to use; must be one of 4, 8, or 16.
+            default_steps (int): Default number of inference steps to use when generating images.
+            default_guidance (float): Default guidance/guidance scale to use when generating images.
+            lora_paths (list[str] | None): Optional list of file paths to LoRA adapter files. If provided, must be paired with `lora_scales`.
+            lora_scales (list[float] | None): Optional list of scales for each LoRA adapter. If provided, must be paired with `lora_paths` and have the same length.
+        
+        Raises:
+            InvalidConfigurationError: If `quantize` is not one of 4, 8, or 16; if only one of `lora_paths`/`lora_scales` is provided; or if both are provided but their lengths differ.
+        """
         if quantize not in [4, 8, 16]:
             raise InvalidConfigurationError(
                 f"Invalid quantization level: {quantize}. Must be 4, 8, or 16.",
@@ -82,7 +97,17 @@ class ModelConfiguration:
         lora_paths: list[str] | None = None,
         lora_scales: list[float] | None = None,
     ) -> ModelConfiguration:
-        """Create configuration for Flux Schnell model."""
+        """
+        Create a ModelConfiguration for the Flux "schnell" model.
+        
+        Parameters:
+            quantize (int): Target quantization level; must be one of 4, 8, or 16.
+            lora_paths (list[str] | None): Paths to LoRA adapter files. If provided, must be supplied together with `lora_scales`.
+            lora_scales (list[float] | None): Multiplicative scales for each LoRA adapter. If provided, must be supplied together with `lora_paths` and have the same length.
+        
+        Returns:
+            ModelConfiguration: Configuration for the "schnell" model with default_steps=4 and default_guidance=0.0.
+        """
         return cls(
             model_type="schnell",
             model_config=ModelConfig.schnell(),
@@ -100,7 +125,17 @@ class ModelConfiguration:
         lora_paths: list[str] | None = None,
         lora_scales: list[float] | None = None,
     ) -> ModelConfiguration:
-        """Create configuration for Flux Dev model."""
+        """
+        Return a ModelConfiguration preconfigured for the Flux "dev" model.
+        
+        Parameters:
+            quantize (int): Model weight quantization in bits; allowed values are 4, 8, or 16.
+            lora_paths (list[str] | None): Paths to LoRA adapter files. If provided, must be supplied together with `lora_scales`.
+            lora_scales (list[float] | None): Scaling factors for each LoRA adapter. If provided, must be supplied together with `lora_paths` and have the same length.
+        
+        Returns:
+            ModelConfiguration: Configuration for the "dev" model using ModelConfig.dev() with default_steps=25 and default_guidance=3.5.
+        """
         return cls(
             model_type="dev",
             model_config=ModelConfig.dev(),
@@ -118,7 +153,17 @@ class ModelConfiguration:
         lora_paths: list[str] | None = None,
         lora_scales: list[float] | None = None,
     ) -> ModelConfiguration:
-        """Create configuration for Flux Krea Dev model."""
+        """
+        Create a ModelConfiguration for the "krea-dev" Flux model.
+        
+        Parameters:
+            quantize (int): Quantization level to use for the model; must be one of 4, 8, or 16. Defaults to DEFAULT_QUANTIZE.
+            lora_paths (list[str] | None): Paths to LoRA adapter files. If provided, must be paired with `lora_scales`.
+            lora_scales (list[float] | None): Scaling factors for each LoRA adapter. Must be the same length as `lora_paths` when provided.
+        
+        Returns:
+            ModelConfiguration: Configuration for the "krea-dev" model with default_steps=28 and default_guidance=4.5.
+        """
         return cls(
             model_type="krea-dev",
             model_config=ModelConfig.dev(),
@@ -131,7 +176,15 @@ class ModelConfiguration:
 
     @classmethod
     def kontext(cls, quantize: int = DEFAULT_QUANTIZE) -> ModelConfiguration:
-        """Create configuration for Flux Kontext model."""
+        """
+        Create a ModelConfiguration for the Flux Kontext model.
+        
+        Parameters:
+            quantize (int): Target model quantization in bits (allowed values: 4, 8, 16).
+        
+        Returns:
+            ModelConfiguration: Configuration for the Kontext model with default_steps=28, default_guidance=2.5, no ModelConfig, and LoRA disabled.
+        """
         return cls(
             model_type="kontext",
             model_config=None,  # Kontext doesn't use ModelConfig
@@ -216,7 +269,22 @@ class BaseFluxModel(ABC):
             return result
 
     def _prepare_config(self, **kwargs: Any) -> Config:
-        """Prepare configuration for image generation."""
+        """
+        Builds and validates a Config for image generation from provided overrides.
+        
+        Accepts the following keyword overrides (if omitted, defaults are used from the model configuration):
+        - width (int): Image width in pixels; must be greater than zero.
+        - height (int): Image height in pixels; must be greater than zero.
+        - steps or num_inference_steps (int): Number of inference steps; must be greater than zero.
+        - guidance or guidance_scale (float): Guidance scale; must be zero or greater.
+        - image_path (str or Path): Path to an existing image to use for inpainting/editing.
+        
+        Returns:
+            Config: A Config populated with `num_inference_steps`, `guidance`, `width`, `height`, and `image_path` when provided.
+        
+        Raises:
+            ModelGenerationError: If any provided value is invalid or if `image_path` does not exist.
+        """
         # Validate dimensions
         width = kwargs.get("width", 1024)
         height = kwargs.get("height", 1024)
@@ -360,6 +428,24 @@ class FluxModel:
         lora_paths: list[str] | None = None,
         lora_scales: list[float] | None = None,
     ) -> None:
+        """
+        Initialize a FluxModel manager that builds and prepares a Flux model instance.
+        
+        Validates the requested configuration and LoRA parameters, constructs a ModelConfiguration
+        using the appropriate factory, instantiates the corresponding model class, and stores
+        the created model and configuration on the instance.
+        
+        Parameters:
+            model_path (str): Path or identifier of the model to load.
+            config_name (str): One of the available configuration keys (e.g., "flux-dev", "flux-schnell", "flux-krea-dev", "flux-kontext-dev").
+            quantize (int): Quantization level to use for the model (allowed values: 4, 8, 16).
+            lora_paths (list[str] | None): Optional list of LoRA adapter file paths; must be provided together with lora_scales when used.
+            lora_scales (list[float] | None): Optional list of scales corresponding to each LoRA adapter in lora_paths.
+        
+        Raises:
+            InvalidConfigurationError: If config_name is unknown or if LoRA parameters are supplied for the Kontext configuration.
+            ModelLoadError: If instantiation or configuration of the underlying model fails.
+        """
         self.config_name = config_name
         self.model_path = model_path
         self.quantize = quantize

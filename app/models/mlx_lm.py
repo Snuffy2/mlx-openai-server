@@ -48,6 +48,22 @@ class MLX_LM:
         context_length: int = DEFAULT_CONTEXT_LENGTH,
         trust_remote_code: bool = DEFAULT_TRUST_REMOTE_CODE,
     ) -> None:
+        """
+        Initialize the MLX_LM wrapper by loading the model and tokenizer from the given path.
+        
+        Loads the model and tokenizer, sets tokenizer-related attributes (pad_token_id, bos_token),
+        records the model type and context length, and creates an OutlinesTransformerTokenizer
+        wrapper for outline-aware generation. During model download/load, stdout and stderr are
+        temporarily redirected to suppress low-level progress output that can raise BrokenPipeError.
+        
+        Parameters:
+            model_path (str): Filesystem path or remote identifier for the model to load.
+            context_length (int): Maximum key-value cache / context length to use for generation.
+            trust_remote_code (bool): Whether to allow model/tokenizer code from remote sources.
+        
+        Raises:
+            ValueError: If the model or tokenizer cannot be loaded.
+        """
         try:
             # Some third-party download utilities (huggingface_hub + tqdm)
             # write progress to stderr which can raise BrokenPipeError when
@@ -87,6 +103,15 @@ class MLX_LM:
         return mx.mean(embeddings, axis=1)
 
     def _apply_l2_normalization(self, embeddings: mx.array) -> mx.array:
+        """
+        Normalize each embedding vector to have L2 norm equal to 1.
+        
+        Parameters:
+            embeddings (mx.array): 2-D array of shape (N, D) containing N embedding vectors of dimension D.
+        
+        Returns:
+            mx.array: Array of the same shape as `embeddings` where each row has been divided by its L2 norm (a small epsilon is added to norms to avoid division by zero).
+        """
         l2_norms = mx.linalg.norm(embeddings, axis=1, keepdims=True)
         return embeddings / (l2_norms + 1e-8)
 
@@ -95,7 +120,16 @@ class MLX_LM:
         prompts: list[str],
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> list[list[int]]:
-        """Process prompts in batches with optimized tokenization."""
+        """
+        Tokenize prompts in batches and pad each sequence to the batch maximum length for model-ready input.
+        
+        Parameters:
+            prompts: List of prompt strings to tokenize.
+            batch_size: Number of prompts to process per batch; controls memory vs throughput.
+        
+        Returns:
+            A list of token id sequences where each sequence is padded with a safe pad token id to match its batch's maximum length.
+        """
         all_tokenized = []
 
         # Process prompts in batches
@@ -131,11 +165,9 @@ class MLX_LM:
     def get_model_type(self) -> str:
         """
         Get the model type identifier.
-
-        Returns
-        -------
-        str
-            The model type string.
+        
+        Returns:
+            The model type as a string.
         """
         return str(self.model_type)
 
@@ -204,16 +236,26 @@ class MLX_LM:
         **kwargs: Any,
     ) -> tuple[str | Generator[Any, None, None], int]:
         """
-        Generate text response from the model.
-
-        Args:
-            messages (list[dict[str, str]]): List of messages in the conversation.
-            stream (bool): Whether to stream the response.
-            **kwargs: Additional parameters for generation
-                - temperature: Sampling temperature (default: 0.0)
-                - top_p: Top-p sampling parameter (default: 1.0)
-                - seed: Random seed (default: 0)
-                - max_tokens: Maximum number of tokens to generate (default: 256)
+        Generate a model response for a chat conversation.
+        
+        Parameters:
+            messages (list[dict[str, str]]): Conversation messages. Each message should be a mapping with string fields such as "role" and "content".
+            stream (bool): If True, return a generator that yields streamed generation chunks; if False, return the full generated string.
+            **kwargs: Optional generation parameters:
+                - temperature (float): Sampling temperature.
+                - top_p (float): Nucleus sampling probability threshold.
+                - top_k (int): Top-k sampling cutoff.
+                - min_p (float): Minimum probability threshold for sampling.
+                - seed (int): Random seed for generation.
+                - max_tokens (int): Maximum number of tokens to generate.
+                - chat_template_kwargs (dict): Additional keyword arguments passed to the chat template application.
+                - repetition_penalty (float): Penalty applied to repeated tokens.
+                - repetition_context_size (int): Context window size for repetition handling.
+                - schema (Any): Optional JSON schema used to constrain generation via an outlines logits processor.
+        
+        Returns:
+            tuple[str | Generator[Any, None, None], int]: A pair where the first element is either the generated text (when stream is False)
+            or a generator yielding streamed chunks (when stream is True), and the second element is the prompt length in tokens.
         """
         # Set default parameters if not provided
         seed = kwargs.get("seed", DEFAULT_SEED)

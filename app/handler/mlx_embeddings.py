@@ -43,7 +43,17 @@ class MLXEmbeddingsHandler:
         logger.info(f"Initialized MLXEmbeddingsHandler with model path: {model_path}")
 
     async def get_models(self) -> list[dict[str, Any]]:
-        """Get list of available models with their metadata."""
+        """
+        Provide metadata for the available local model.
+        
+        Returns:
+            A list containing a single dictionary with the model's metadata:
+            - `id`: model path
+            - `object`: the string "model"
+            - `created`: model creation timestamp
+            - `owned_by`: the string "local"
+            Returns an empty list if an error occurs while retrieving the metadata.
+        """
         try:
             return [
                 {
@@ -113,14 +123,19 @@ class MLXEmbeddingsHandler:
 
     async def _process_request(self, request_data: dict[str, Any]) -> list[list[float]]:
         """
-        Process an embeddings request. This is the worker function for the request queue.
-
-        Args:
-            request_data: Dictionary containing the request data.
-
-        Returns
-        -------
-            list[list[float]]: The embeddings for the input texts.
+        Process a queued request and return embeddings for the provided text inputs.
+        
+        Parameters:
+            request_data (dict): Request payload that must include:
+                - "type" (str): Expected to be "embeddings".
+                - "input" (list[str]): Texts to embed.
+                - "max_length" (int, optional): Maximum token length for the model (defaults to 512).
+        
+        Returns:
+            list[list[float]]: Embedding vectors, one list of floats per input text.
+        
+        Raises:
+            ValueError: If `request_data["type"]` is not "embeddings".
         """
         try:
             # Check if the request is for embeddings

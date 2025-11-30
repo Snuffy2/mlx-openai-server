@@ -60,7 +60,16 @@ class MLXWhisperHandler:
         logger.info(f"Initialized MLXWhisperHandler with model path: {model_path}")
 
     async def get_models(self) -> list[dict[str, Any]]:
-        """Get list of available models with their metadata."""
+        """
+        List available models and their metadata.
+        
+        Returns:
+            list[dict[str, Any]]: A list of model metadata dictionaries. Each dictionary contains:
+                - `id`: model identifier (the configured model path)
+                - `object`: object type (e.g., "model")
+                - `created`: model creation timestamp
+                - `owned_by`: owner identifier (e.g., "local")
+        """
         return [
             {
                 "id": self.model_path,
@@ -71,7 +80,16 @@ class MLXWhisperHandler:
         ]
 
     async def initialize(self, queue_config: dict[str, Any] | None = None) -> None:
-        """Initialize the handler and start the request queue."""
+        """
+        Initialize or reconfigure the request queue and start its worker loop.
+        
+        If `queue_config` is not provided, a default configuration is created with a longer audio-processing timeout (600 seconds), a default queue size of 50, and the handler's current `request_queue.max_concurrency`. The method replaces the handler's `request_queue` with a new RequestQueue configured from `queue_config` (falling back to existing queue attributes when present) and starts it using the handler's `_process_request` worker.
+        
+        Parameters:
+            queue_config (dict[str, Any] | None): Optional queue configuration with keys
+                `max_concurrency` (int), `timeout` (seconds), and `queue_size` (int).
+                Missing keys are filled from existing queue attributes or sensible defaults.
+        """
         if not queue_config:
             queue_config = {
                 "max_concurrency": self.request_queue.max_concurrency,
@@ -99,7 +117,18 @@ class MLXWhisperHandler:
         self,
         request: TranscriptionRequest,
     ) -> TranscriptionResponse | str:
-        """Generate a transcription response for the given request."""
+        """
+        Generate a transcription for the provided request and return it in the requested format.
+        
+        Parameters:
+            request (TranscriptionRequest): The transcription request containing the uploaded audio and output format preferences; if `request.response_format` equals `TranscriptionResponseFormat.JSON` the result is returned as a `TranscriptionResponse`, otherwise the function returns the transcribed text string.
+        
+        Returns:
+            TranscriptionResponse | str: A `TranscriptionResponse` object when JSON format is requested, the transcribed text string otherwise.
+        
+        Notes:
+            The temporary audio file created for processing is removed before the function returns.
+        """
         request_id = f"transcription-{uuid.uuid4()}"
         temp_file_path = None
 
@@ -132,12 +161,15 @@ class MLXWhisperHandler:
         request_data: dict[str, Any],
     ) -> AsyncGenerator[str, None]:
         """
-        Generate a transcription stream from prepared request data.
-
-        Yields SSE-formatted chunks with timing information.
-
-        Args:
-            request_data: Prepared request data with audio_path already saved
+        Generate a Server-Sent-Events (SSE) transcription stream from prepared request data.
+        
+        Prepares the request for streaming, runs the model in a background thread, and yields SSE-formatted strings containing partial transcription chunks and timing metadata until completion. The function expects request_data to include an "audio_path" pointing to a saved temporary audio file; it will set request_data["stream"] = True and will remove the "audio_path" entry when invoking the model. After streaming completes (or on error), the temporary audio file is deleted and garbage collection is invoked.
+        
+        Parameters:
+            request_data (dict[str, Any]): Prepared model request parameters. Must include "audio_path" (str). Other model options (e.g., temperature, language) may be present.
+        
+        Returns:
+            AsyncGenerator[str, None]: An asynchronous generator that yields SSE data frames as strings. Each yielded string is a newline-terminated SSE event containing a JSON-encoded transcription chunk; after the final chunk a `"data: [DONE]\n\n"` frame is yielded.
         """
         request_id = f"transcription-{uuid.uuid4()}"
         created_time = int(time.time())
@@ -304,17 +336,18 @@ class MLXWhisperHandler:
 
     async def prepare_transcription_request(self, request: TranscriptionRequest) -> dict[str, Any]:
         """
-        Prepare a transcription request by parsing model parameters.
-
-        The function saves the uploaded file and returns its path along with other
-        request fields ready for the model.
-
-        Args:
-            request: TranscriptionRequest object.
-
-        Returns
-        -------
-            Dict containing the saved audio path and other request data ready for the model.
+        Builds a model-ready request dictionary and saves the uploaded audio to a temporary file.
+        
+        Saves the uploaded file, sets "audio_path" and "verbose" and includes any provided optional model parameters (e.g., temperature, language, initial_prompt, top_p, top_k, min_p, seed, frequency_penalty, repetition_penalty, presence_penalty).
+        
+        Parameters:
+            request (TranscriptionRequest): Incoming transcription request containing the uploaded file and optional model parameters.
+        
+        Returns:
+            dict: Request data ready for model inference, including "audio_path" and any provided parameters.
+        
+        Raises:
+            HTTPException: If saving the uploaded file or preparing the request fails (returns a 400 Bad Request with a standardized error payload).
         """
         try:
             file = request.file

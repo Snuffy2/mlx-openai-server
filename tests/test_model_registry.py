@@ -16,6 +16,11 @@ def test_registry_tracks_handlers_and_metadata() -> None:
 
 
 async def _exercise_registry() -> None:
+    """
+    Exercise ModelRegistry lifecycle operations and assert expected state transitions.
+    
+    Registers a model, verifies its initial metadata and status, updates the model state to attach a handler and apply metadata updates while checking the handler and metadata changes, detaches the handler to verify it is cleared, and finally unregisters the model confirming the registry count goes to zero.
+    """
     registry = ModelRegistry()
     registry.register_model(
         model_id="foo",
@@ -56,6 +61,15 @@ class DummyManager:
     """A simple manager mock that records calls and simulates VRAM state."""
 
     def __init__(self) -> None:
+        """
+        Initialize a DummyManager that simulates VRAM loading state and tracks calls and active sessions.
+        
+        Sets:
+        - _loaded: whether VRAM is currently considered loaded.
+        - load_calls / unload_calls: counters for number of load and unload requests.
+        - ensure_lock: asyncio.Lock used to serialize load/unload operations.
+        - _active_requests: number of active sessions using the manager.
+        """
         self._loaded = False
         self.load_calls = 0
         self.unload_calls = 0
@@ -63,7 +77,12 @@ class DummyManager:
         self._active_requests = 0
 
     def is_vram_loaded(self) -> bool:
-        """Return whether VRAM is currently loaded for this manager."""
+        """
+        Indicates whether the manager currently has VRAM loaded.
+        
+        Returns:
+            bool: True if VRAM is loaded, False otherwise.
+        """
         return self._loaded
 
     async def ensure_vram_loaded(
@@ -72,7 +91,15 @@ class DummyManager:
         force: bool = False,
         timeout: float | None = None,
     ) -> None:
-        """Ensure VRAM is loaded; simulate a delay for loading."""
+        """
+        Ensure the manager's VRAM is loaded, performing a load if necessary.
+        
+        Acquires the manager's internal lock to serialize concurrent callers. If a load is performed, increments `load_calls` and marks the manager as loaded; if the manager is already loaded and `force` is False, this call is a no-op.
+        
+        Parameters:
+        	force (bool): If True, force a reload even if VRAM is already marked loaded.
+        	timeout (float | None): Optional timeout value accepted for API compatibility; currently ignored by this implementation.
+        """
         async with self.ensure_lock:
             # Simulate expensive load
             if not self._loaded or force:
@@ -81,7 +108,14 @@ class DummyManager:
                 self._loaded = True
 
     async def release_vram(self, *, timeout: float | None = None) -> None:
-        """Release VRAM for this manager, simulating an unload delay."""
+        """
+        Release VRAM held by this manager.
+        
+        If VRAM is currently loaded, increments `unload_calls`, waits approximately 0.005 seconds to simulate an unload, and marks the manager as not loaded.
+        
+        Parameters:
+        	timeout (float | None): Ignored by this mock implementation; present for API compatibility.
+        """
         async with self.ensure_lock:
             if self._loaded:
                 self.unload_calls += 1
@@ -94,7 +128,18 @@ class DummyManager:
         ensure_vram: bool = True,
         ensure_timeout: float | None = None,
     ) -> AbstractAsyncContextManager[Any]:
-        """Return an async context manager for request sessions."""
+        """
+        Provide an async context manager for a request session tied to this manager.
+        
+        The context manager increments the manager's active request count for the duration of the session and, if requested, ensures the manager's VRAM is loaded before yielding.
+        
+        Parameters:
+            ensure_vram (bool): If True, ensure VRAM is loaded before entering the session.
+            ensure_timeout (float | None): Timeout in seconds to wait for VRAM to become available; None means no timeout.
+        
+        Returns:
+            AbstractAsyncContextManager[Any]: An async context manager that yields the manager for use within the session.
+        """
         return DummySession(self, ensure_vram, ensure_timeout)
 
 
@@ -107,12 +152,25 @@ class DummySession:
         ensure_vram: bool,
         ensure_timeout: float | None,
     ) -> None:
+        """
+        Initialize the DummySession with its manager and VRAM ensure settings.
+        
+        Parameters:
+            manager (DummyManager): Manager instance the session will operate on.
+            ensure_vram (bool): If True, entering the session will call the manager to ensure VRAM is loaded.
+            ensure_timeout (float | None): Timeout in seconds passed to the manager's ensure call; None means no timeout.
+        """
         self.manager = manager
         self.ensure_vram = ensure_vram
         self.ensure_timeout = ensure_timeout
 
     async def __aenter__(self) -> DummyManager:
-        """Enter the async context manager."""
+        """
+        Enter the context, increment the manager's active request count, and optionally ensure the manager's VRAM is loaded.
+        
+        Returns:
+            DummyManager: The underlying manager instance associated with this session.
+        """
         self.manager._active_requests += 1
         if self.ensure_vram:
             await self.manager.ensure_vram_loaded(timeout=self.ensure_timeout)
@@ -124,7 +182,11 @@ class DummySession:
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        """Exit the async context manager."""
+        """
+        Release the session and decrement the manager's active request count.
+        
+        Called on exiting the async context; decreases the associated manager's active request counter by one.
+        """
         self.manager._active_requests -= 1
 
 
@@ -144,6 +206,15 @@ def test_get_or_attach_manager_concurrent() -> None:
         loader_call_count = 0
 
         async def loader(mid: str) -> DummyManager:
+            """
+            Create and return a new DummyManager for the given model id after a short simulated initialization delay.
+            
+            Parameters:
+                mid (str): Model identifier for which the manager is being created.
+            
+            Returns:
+                DummyManager: A newly constructed DummyManager instance.
+            """
             nonlocal loader_call_count
             loader_call_count += 1
             # Simulate async init delay
@@ -203,9 +274,18 @@ def test_request_vram_load_unload_idempotent_concurrent() -> None:
 
 
 def test_handler_session_updates_active_requests_and_notifies() -> None:
-    """handler_session should update active_requests and call notifier (stress test)."""
+    """
+    Verify that handler_session increments and decrements the active request count and notifies registered observers.
+    
+    Within a session, the model's VRAM status should report active_requests == 1; after the session, active_requests should be 0 and any registered notifier should have been called with the model id.
+    """
 
     async def _test() -> None:
+        """
+        Verify that handler_session increments the model's active request count while open and notifies registered observers when the session exits.
+        
+        This test registers a model with a DummyManager, registers an activity notifier, enters an asynchronous handler_session for the model and asserts that `active_requests` equals 1 inside the session, then asserts `active_requests` returns to 0 after exiting and the notifier was invoked with the model id.
+        """
         registry = ModelRegistry()
         model_id = "session-model"
         registry.register_model(model_id, handler=None, model_type="lm")
@@ -216,6 +296,14 @@ def test_handler_session_updates_active_requests_and_notifies() -> None:
         notified: list[str] = []
 
         def notifier(mid: str) -> None:
+            """
+            Record a model ID in the surrounding notifier list.
+            
+            Appends the provided model identifier to the `notified` list captured from the enclosing scope.
+            
+            Parameters:
+                mid (str): The model identifier to record.
+            """
             notified.append(mid)
 
         registry.register_activity_notifier(notifier)

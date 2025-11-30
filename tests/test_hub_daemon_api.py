@@ -19,31 +19,102 @@ from app.hub.daemon import create_app
 
 class _StubSupervisor:
     def __init__(self) -> None:
+        """
+        Initialize the stub supervisor's in-memory state.
+        
+        Sets `shutdown_called` to False and creates `started` as an empty mapping from model name (str) to mock PID (int).
+        """
         self.shutdown_called = False
         self.started: dict[str, int] = {}
 
     def get_status(self) -> dict[str, Any]:
+        """
+        Provide a fixed supervisor status payload for tests.
+        
+        The returned payload contains a numeric `timestamp` and a `models` list with the current model entries.
+        
+        Returns:
+            dict[str, Any]: A status payload with keys:
+                - "timestamp" (int): A monotonic timestamp value.
+                - "models" (list[dict]): List of model descriptors, each with:
+                    - "name" (str): Model name.
+                    - "state" (str): Model state (e.g., "stopped").
+        """
         return {"timestamp": 1, "models": [{"name": "alpha", "state": "stopped"}]}
 
     async def start_model(self, name: str) -> dict[str, Any]:
+        """
+        Record that a model was started and return its start payload.
+        
+        Parameters:
+            name (str): The model's name.
+        
+        Returns:
+            dict: Payload with keys "status" (the string "started"), "name" (the model name), and "pid" (a mock process id).
+        """
         self.started[name] = 1234
         return {"status": "started", "name": name, "pid": 1234}
 
     async def stop_model(self, name: str) -> dict[str, Any]:
+        """
+        Stop tracking the given model and return a stopped-status payload.
+        
+        Parameters:
+            name (str): Name of the model to stop.
+        
+        Returns:
+            dict[str, Any]: A payload containing "status": "stopped" and "name": the stopped model name.
+        """
         self.started.pop(name, None)
         return {"status": "stopped", "name": name}
 
     async def load_model(self, name: str) -> dict[str, Any]:
+        """
+        Record that the model's memory was loaded and report the action.
+        
+        Parameters:
+            name (str): The model identifier.
+        
+        Returns:
+            dict: A payload with keys:
+                - "status": the string "memory_loaded".
+                - "name": the provided model identifier.
+        """
         return {"status": "memory_loaded", "name": name}
 
     async def unload_model(self, name: str) -> dict[str, Any]:
+        """
+        Mark the specified model's in-memory resources as unloaded and report the outcome.
+        
+        Parameters:
+            name (str): The model identifier whose memory was unloaded.
+        
+        Returns:
+            result (dict[str, Any]): A payload containing `status` set to `"memory_unloaded"` and `name` equal to the provided model identifier.
+        """
         return {"status": "memory_unloaded", "name": name}
 
     async def reload_config(self) -> dict[str, Any]:
+        """
+        Return a summary of models affected by reloading the hub configuration.
+        
+        Updates the supervisor's configuration and reports which models were started, stopped, or unchanged as a result.
+        
+        Returns:
+            dict[str, list[str]]: Mapping with keys:
+                - "started": list of model names that were started.
+                - "stopped": list of model names that were stopped.
+                - "unchanged": list of model names that remained unchanged.
+        """
         return {"started": [], "stopped": [], "unchanged": []}
 
     async def shutdown_all(self) -> None:
         # mark called so tests can assert the background task ran
+        """
+        Record that a shutdown was requested for the stub supervisor.
+        
+        Sets `self.shutdown_called` to True so tests can verify that the shutdown background task was scheduled or executed.
+        """
         self.shutdown_called = True
         logger.info("Stub shutdown called")
 

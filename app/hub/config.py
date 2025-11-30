@@ -53,7 +53,12 @@ class MLXHubGroupConfig:
     max_loaded: int | None = None
 
     def __post_init__(self) -> None:
-        """Validate group names and ensure ``max_loaded`` when provided is sane."""
+        """
+        Validate and normalize the group's name and enforce that `max_loaded`, if provided, is greater than or equal to 1.
+        
+        Raises:
+            HubConfigError: if the name is invalid or if `max_loaded` is less than 1.
+        """
         self.name = _ensure_slug(self.name, field_name="group name")
         if self.max_loaded is not None and self.max_loaded < 1:
             raise HubConfigError("max_loaded must be a positive integer when provided")
@@ -74,28 +79,27 @@ class MLXHubConfig:
     source_path: Path | None = None
 
     def __post_init__(self) -> None:
-        """Normalize hub defaults."""
+        """
+        Normalize hub-level defaults.
+        
+        Converts the configured log level to uppercase and expands any user (~) in the log path.
+        """
         self.log_level = self.log_level.upper()
         self.log_path = self.log_path.expanduser()
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
-    """Load and parse a YAML file.
-
-    Parameters
-    ----------
-    path : Path
-        Path to the YAML file.
-
-    Returns
-    -------
-    dict[str, Any]
-        The parsed YAML data.
-
-    Raises
-    ------
-    HubConfigError
-        If the file is not found or parsing fails.
+    """
+    Parse a YAML file and return its top-level mapping.
+    
+    Parameters:
+        path (Path): Filesystem path to the YAML file.
+    
+    Returns:
+        dict[str, Any]: Parsed YAML content as a mapping.
+    
+    Raises:
+        HubConfigError: If the file does not exist, cannot be parsed, or the document root is not a mapping.
     """
     try:
         with path.open("r", encoding="utf-8") as fh:
@@ -111,22 +115,19 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _build_groups(raw_groups: list[dict[str, Any]] | None) -> list[MLXHubGroupConfig]:
-    """Build group configurations from raw data.
-
-    Parameters
-    ----------
-    raw_groups : list[dict[str, Any]] or None
-        Raw group data from YAML.
-
-    Returns
-    -------
-    list[MLXHubGroupConfig]
-        List of group configurations.
-
-    Raises
-    ------
-    HubConfigError
-        If group data is invalid.
+    """
+    Constructs MLXHubGroupConfig objects from raw group mappings.
+    
+    Converts each mapping in `raw_groups` into an MLXHubGroupConfig. Each mapping must include the required `name` field; an optional `max_loaded` value will be coerced to an integer when present. If `raw_groups` is None or empty, an empty list is returned.
+    
+    Parameters:
+        raw_groups (list[dict[str, Any]] | None): Raw group entries from the YAML configuration.
+    
+    Returns:
+        list[MLXHubGroupConfig]: List of validated group configurations.
+    
+    Raises:
+        HubConfigError: If a group entry is not a mapping, is missing `name`, contains a non-integer `max_loaded`, or if duplicate group names are detected.
     """
     groups: list[MLXHubGroupConfig] = []
     if not raw_groups:
@@ -158,24 +159,18 @@ def _build_groups(raw_groups: list[dict[str, Any]] | None) -> list[MLXHubGroupCo
 
 
 def _resolve_model_log_file(server_config: MLXServerConfig, hub_log_path: Path) -> MLXServerConfig:
-    """Resolve the log file path for a model configuration.
-
-    Parameters
-    ----------
-    server_config : MLXServerConfig
-        The server configuration.
-    hub_log_path : Path
-        The hub log directory path.
-
-    Returns
-    -------
-    MLXServerConfig
-        The updated server configuration.
-
-    Raises
-    ------
-    HubConfigError
-        If the model name is missing.
+    """
+    Derives and sets a default log file path for a model when no per-model log file is configured.
+    
+    Parameters:
+        server_config (MLXServerConfig): Model server configuration to update.
+        hub_log_path (Path): Directory used to construct the default model log file path.
+    
+    Returns:
+        MLXServerConfig: The same server_config, with `log_file` set to "<hub_log_path>/<model_name>.log" if it was previously unset.
+    
+    Raises:
+        HubConfigError: If the model `name` is missing when a default log file must be derived.
     """
     if server_config.no_log_file:
         return server_config
@@ -202,44 +197,22 @@ def _build_models(
     persisted_ports: dict[str, int] | None = None,
     additional_reserved_ports: set[int] | None = None,
 ) -> list[MLXServerConfig]:
-    """Build model configurations from raw data.
-
-    Parameters
-    ----------
-    raw_models : list[dict[str, Any]] or None
-        Raw model data from YAML.
-    base_host : str
-        Base host for models.
-    base_port : int
-        Base port for models.
-    starting_port : int
-        The first port number to try/assign when auto-allocating model server
-        ports. Must be a positive integer (typically >= 1024 and <= 65535)
-        and should not collide with reserved ports (for example the hub
-        controller `base_port` or any entries in ``additional_reserved_ports``).
-        When ``persisted_ports`` is provided, previously assigned ports are
-        preferred and ``starting_port`` only influences allocation for models
-        without a persisted assignment.
-    base_log_level : str
-        Base log level for models.
-    hub_log_path : Path
-        Hub log directory path.
-    group_lookup : dict[str, MLXHubGroupConfig]
-        Lookup of group configurations.
-    persisted_ports : dict[str, int] | None, optional
-        Mapping of model names to previously assigned ports. When provided, models
-        without an explicit ``port`` reuse their prior assignment even if the
-        socket currently appears busy.
-
-    Returns
-    -------
-    list[MLXServerConfig]
-        List of model configurations.
-
-    Raises
-    ------
-    HubConfigError
-        If model data is invalid.
+    """
+    Constructs MLXServerConfig objects from raw model YAML entries, assigning hosts, ports, groups, and log settings.
+    
+    Parameters:
+        raw_models (list[dict[str, Any]] | None): Raw model entries parsed from YAML; must contain at least one mapping with required keys like `name` and `model_path`.
+        starting_port (int): Port number to begin scanning when auto-allocating ports for models that do not specify a port and have no persisted assignment.
+        hub_log_path (Path): Directory used to derive per-model log file paths when a model has no explicit `log_file`.
+        group_lookup (dict[str, MLXHubGroupConfig]): Mapping of valid group slugs to group configurations used to validate model `group` references.
+        persisted_ports (dict[str, int] | None): Optional map of model name -> previously assigned port; these ports are preferred for models that omit a `port`.
+        additional_reserved_ports (set[int] | None): Optional set of extra ports that must not be assigned to models (in addition to the hub controller port).
+    
+    Returns:
+        list[MLXServerConfig]: A list of validated and fully populated model server configurations.
+    
+    Raises:
+        HubConfigError: If the raw data is missing required fields, contains invalid/duplicate names, references undefined groups, specifies invalid or conflicting ports, or if no models are provided.
     """
     if not raw_models:
         raise HubConfigError("Hub config must include at least one model entry")
@@ -332,20 +305,19 @@ def load_hub_config(
     *,
     persisted_ports: dict[str, int] | None = None,
 ) -> MLXHubConfig:
-    """Load and validate a hub configuration file.
-
-    Parameters
-    ----------
-    config_path : Path, str, or None, optional
-        Path to the hub configuration file. If None, uses default path.
-    persisted_ports : dict[str, int] | None, optional
-        Mapping of model names to previously assigned ports. Useful when reloading
-        while hub-managed workers are still bound to their sockets.
-
-    Returns
-    -------
-    MLXHubConfig
-        The loaded and validated hub configuration.
+    """
+    Load and validate a hub configuration from a YAML file and produce an MLXHubConfig.
+    
+    If config_path is None the default configuration path is used. persisted_ports, when
+    provided, maps model names to previously assigned ports and is used to preserve port
+    assignments for models that remain bound to their sockets during a reload.
+    
+    Parameters:
+        config_path (Path | str | None): Path to the hub configuration file or None to use the default.
+        persisted_ports (dict[str, int] | None): Optional mapping of model names to previously assigned ports.
+    
+    Returns:
+        MLXHubConfig: The loaded and validated hub configuration.
     """
     if config_path is None:
         path = DEFAULT_HUB_CONFIG_PATH
@@ -409,6 +381,19 @@ def load_hub_config(
 
 
 def _coerce_port_value(name: str, port_value: Any) -> int:
+    """
+    Validate and coerce a model port value to an integer within the allowed port range.
+    
+    Parameters:
+        name (str): Model identifier used in error messages.
+        port_value (Any): Value to coerce to an integer port.
+    
+    Returns:
+        int: Port number between PORT_MIN and PORT_MAX.
+    
+    Raises:
+        HubConfigError: If the value cannot be converted to an integer or is outside the valid port range.
+    """
     try:
         candidate_port = int(port_value)
     except (TypeError, ValueError) as exc:
@@ -426,6 +411,21 @@ def _allocate_port(
     starting_port: int,
     reserved_ports: set[int],
 ) -> tuple[int, int]:
+    """
+    Finds the next available TCP port on a host starting at a given port while skipping reserved ports.
+    
+    Parameters:
+        name (str): Identifier used in error messages when allocation fails.
+        host (str): Hostname or IP where port availability is checked.
+        starting_port (int): Port number to begin the search (search will not go below module minimum).
+        reserved_ports (set[int]): Ports that must be skipped because they are reserved.
+    
+    Returns:
+        tuple[int, int]: A pair (allocated_port, next_port_candidate) where `allocated_port` is an available port assigned for use and `next_port_candidate` is the port number immediately after the allocated port.
+    
+    Raises:
+        HubConfigError: If no available port can be found within the allowed port range.
+    """
     port = max(starting_port, PORT_MIN)
     while port <= PORT_MAX:
         if port not in reserved_ports and is_port_available(host, port):
