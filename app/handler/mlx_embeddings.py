@@ -37,8 +37,11 @@ class MLXEmbeddingsHandler:
         self.model: MLX_Embeddings = MLX_Embeddings(model_path)
         self.model_created = int(time.time())  # Store creation time when model is loaded
 
-        # Initialize request queue for embedding tasks
-        self.request_queue = RequestQueue(max_concurrency=max_concurrency)
+        # Initialize request queue for embedding tasks and bind per-model logger
+        self.request_queue = RequestQueue(
+            max_concurrency=max_concurrency,
+            logger=logger.bind(model=self.model_path),
+        )
 
         logger.info(f"Initialized MLXEmbeddingsHandler with model path: {model_path}")
 
@@ -51,7 +54,7 @@ class MLXEmbeddingsHandler:
                     "object": "model",
                     "created": self.model_created,
                     "owned_by": "local",
-                }
+                },
             ]
         except Exception as e:
             logger.error(f"Error getting models. {type(e).__name__}: {e}")
@@ -126,7 +129,8 @@ class MLXEmbeddingsHandler:
             # Check if the request is for embeddings
             if request_data.get("type") == "embeddings":
                 result = self.model(
-                    texts=request_data["input"], max_length=request_data.get("max_length", 512)
+                    texts=request_data["input"],
+                    max_length=request_data.get("max_length", 512),
                 )
                 # Force garbage collection after embeddings
                 gc.collect()

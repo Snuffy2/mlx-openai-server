@@ -26,10 +26,12 @@ dependencies = [
   "av>=16.0.1,<17",
   "click>=8.2.1,<8.4",
   "fastapi>=0.115.14,<0.130",
+  "starlette>=0.27,<1",
   "httpx>=0.28,<1",
   "json_repair>=0.52.1,<0.60",
   "librosa>=0.11.0,<0.12",
   "loguru>=0.7.3,<0.8",
+  "PyYAML>=6.0.2,<7",
   "mlx>=0.30",                        # Needed due to a typing issue in <0.30
   "mlx-embeddings>=0.0.4,<0.1",
   "mlx-lm==0.28.3",
@@ -38,7 +40,7 @@ dependencies = [
   "numpy>=2.2.0,<2.4",
   "openai-harmony>=0.0.4,<0.1",
   "outlines>=1.1.1,<1.3",
-  "pillow>=11,<13",
+  "pillow>=10.4.0,<13",
   "pydantic>=2,<3",
   "python-multipart>=0.0.20,<0.0.25",
   "rich>=14,<15",
@@ -52,6 +54,8 @@ dev = [
   "pre-commit",
   "pytest",
   "ruff",
+  "pytest-asyncio>=0.21,<2",
+  "pytest-httpx",
   "types-aiofiles",
   "types-cffi",
   "types-PyMySQL",
@@ -211,6 +215,7 @@ ignore = [
   "D406",   # Section name should end with a newline
   "D407",   # Section name underlining
   "E501",   # line too long
+  "G004",   # Logging statement uses f-string (acceptable with loguru)
 
   "PLC1901", # {existing} can be simplified to {replacement} as an empty string is falsey; too many false positives
   "PLR0904", # Too many public methods

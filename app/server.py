@@ -12,7 +12,7 @@ model unloading during idle periods to optimize resource usage.
 Key Components
 --------------
 LazyHandlerManager : Manages model handler lifecycle with optional JIT loading
-IdleAutoUnloadController : Background task for automatic model unloading
+CentralIdleAutoUnloadController : Central background task for automatic model unloading
 FastAPI Integration : REST API endpoints with OpenAI-compatible interface
 Memory Management : Periodic cleanup and MLX cache management
 
@@ -30,9 +30,11 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 import gc
 from http import HTTPStatus
+from pathlib import Path
 import sys
 import time
-from typing import TypeAlias
+from types import SimpleNamespace
+from typing import Any, TypeAlias, cast
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,7 +45,11 @@ from starlette.responses import Response
 import uvicorn
 
 from .api.endpoints import router
+from .api.hub_routes import HubConfigError, _call_daemon_api_async, _load_hub_config_from_request
 from .config import MLXServerConfig
+from .const import HUB_POLL_INTERVAL_SECONDS
+from .core.manager_protocol import ManagerProtocol
+from .core.model_registry import ModelRegistry
 from .handler import MFLUX_AVAILABLE, MLXFluxHandler
 from .handler.mlx_embeddings import MLXEmbeddingsHandler
 from .handler.mlx_lm import MLXLMHandler
@@ -59,20 +65,29 @@ MLXHandler: TypeAlias = (
 
 # Supported mflux configuration names per feature for centralized validation
 ALLOWED_IMAGE_GENERATION_CONFIGS: frozenset[str] = frozenset(
-    {"flux-schnell", "flux-dev", "flux-krea-dev"}
+    {"flux-schnell", "flux-dev", "flux-krea-dev"},
 )
 ALLOWED_IMAGE_EDIT_CONFIGS: frozenset[str] = frozenset({"flux-kontext-dev"})
 
 
 def configure_logging(
-    log_file: str | None = None, no_log_file: bool = False, log_level: str = "INFO"
+    log_file: str | None = None,
+    *,
+    no_log_file: bool = False,
+    log_level: str = "INFO",
 ) -> None:
     """Set up loguru handlers used by the server.
 
     This helper replaces the default loguru handler with a console
-    handler using a compact, colored format. When ``no_log_file`` is
-    False a rotating file handler is also added using ``log_file`` or
-    a default path.
+    handler using a compact, colored format. When `no_log_file` is
+    ``False`` a rotating file handler is also added using ``log_file``
+    or a default path.
+
+    Notes
+    -----
+    The parameter ``no_log_file`` is keyword-only to make call sites
+    explicit and avoid accidental positional mistakes (e.g.,
+    ``configure_logging("file.log", True)``).
 
     Parameters
     ----------
@@ -80,15 +95,30 @@ def configure_logging(
         Optional filesystem path where logs should be written. When
         ``None`` and file logging is enabled a sensible default
         (``logs/app.log``) is used.
-    no_log_file : bool, default False
+    no_log_file : bool, default False (keyword-only)
         When True, file logging is disabled and only console logs are
-        emitted.
+        emitted. Must be passed by name.
     log_level : str, default "INFO"
         Minimum log level to emit (e.g. "DEBUG", "INFO").
     """
     logger.remove()  # Remove default handler
 
-    # Add console handler
+    # Ensure log directory exists when a file path is specified (or default)
+    if log_file:
+        with suppress(Exception):
+            Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    else:
+        with suppress(Exception):
+            Path("logs").mkdir(parents=True, exist_ok=True)
+
+    # Add console handler. Exclude records that are specific to a model
+    # (they will be written to per-model log files instead).
+    def _global_filter(record: dict[str, Any]) -> bool:  # pragma: no cover - tiny helper
+        try:
+            return record.get("extra", {}).get("model") is None
+        except Exception:
+            return True
+
     logger.add(
         sys.stdout,
         level=log_level,
@@ -97,15 +127,21 @@ def configure_logging(
         "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
         "✦ <level>{message}</level>",
         colorize=True,
+        enqueue=True,
+        filter=cast("Callable[[Any], bool]", _global_filter),
     )
     if not no_log_file:
         file_path = log_file if log_file else "logs/app.log"
+        with suppress(Exception):
+            Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         logger.add(
             file_path,
             rotation="500 MB",
             retention="10 days",
             level=log_level,
             format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+            enqueue=True,
+            filter=cast("Callable[[Any], bool]", _global_filter),
         )
 
 
@@ -128,12 +164,18 @@ def get_model_identifier(config_args: MLXServerConfig) -> str:
     str
         Value that identifies the model for handler initialization.
     """
-
     return config_args.model_path
 
 
+def get_registry_model_id(config_args: MLXServerConfig) -> str:
+    """Return the identifier used when registering models with the registry."""
+    return config_args.name or config_args.model_identifier
+
+
 def validate_mflux_config(
-    config_name: str, allowed_configs: frozenset[str], feature_name: str
+    config_name: str,
+    allowed_configs: frozenset[str],
+    feature_name: str,
 ) -> None:
     """Ensure mflux is available and the provided config name is supported.
 
@@ -151,16 +193,15 @@ def validate_mflux_config(
     ValueError
         Raised when mflux is missing or the configuration name is unsupported.
     """
-
     if not MFLUX_AVAILABLE:
         raise ValueError(
-            f"{feature_name} requires mflux. Install with: pip install git+https://github.com/cubist38/mflux.git"
+            f"{feature_name} requires mflux. Install with: pip install git+https://github.com/cubist38/mflux.git",
         )
 
     if config_name not in allowed_configs:
         allowed_values = ", ".join(sorted(allowed_configs))
         raise ValueError(
-            f"Invalid config name: {config_name}. Supported configs for {feature_name.lower()} are: {allowed_values}."
+            f"Invalid config name: {config_name}. Supported configs for {feature_name.lower()} are: {allowed_values}.",
         )
 
 
@@ -191,7 +232,6 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
     Exception
         If handler initialization fails for any reason.
     """
-
     model_identifier = get_model_identifier(config_args)
     if config_args.model_type == "image-generation":
         logger.info(f"Initializing MLX handler with model name: {model_identifier}")
@@ -229,7 +269,8 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
             )
         elif config_args.model_type == "embeddings":
             handler = MLXEmbeddingsHandler(
-                model_path=model_identifier, max_concurrency=config_args.max_concurrency
+                model_path=model_identifier,
+                max_concurrency=config_args.max_concurrency,
             )
         elif config_args.model_type == "image-edit":
             if config_args.config_name is None:
@@ -249,7 +290,8 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
             )
         elif config_args.model_type == "whisper":
             handler = MLXWhisperHandler(
-                model_path=model_identifier, max_concurrency=config_args.max_concurrency
+                model_path=model_identifier,
+                max_concurrency=config_args.max_concurrency,
             )
         elif config_args.model_type == "lm":
             handler = MLXLMHandler(
@@ -264,7 +306,7 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
         else:
             raise ValueError(
                 f"Invalid model_type: {config_args.model_type!r}. "
-                f"Supported types are: lm, multimodal, image-generation, image-edit, embeddings, whisper"
+                f"Supported types are: lm, multimodal, image-generation, image-edit, embeddings, whisper",
             )
 
         await handler.initialize(
@@ -272,7 +314,7 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
                 "max_concurrency": config_args.max_concurrency,
                 "timeout": config_args.queue_timeout,
                 "queue_size": config_args.queue_size,
-            }
+            },
         )
         logger.info("MLX handler initialized successfully")
     except Exception as e:
@@ -282,7 +324,7 @@ async def instantiate_handler(config_args: MLXServerConfig) -> MLXHandler:
         return handler
 
 
-class LazyHandlerManager:
+class LazyHandlerManager(ManagerProtocol):
     """Manage handler lifecycle with optional JIT loading and unloading."""
 
     _handler: MLXHandler | None
@@ -313,6 +355,47 @@ class LazyHandlerManager:
         self._on_activity = on_activity
         self._last_activity = time.monotonic()
         self._background_tasks: set[asyncio.Task[None]] = set()
+        # Optional per-model log sink id (registered with loguru)
+        # Bound logger for manager-scoped messages (adds `model` extra)
+        bound_model_name = getattr(self.config_args, "name", None) or getattr(
+            self.config_args, "model_identifier", None
+        )
+        self._logger = logger.bind(model=bound_model_name) if bound_model_name else logger
+        self._log_sink_id: int | None = None
+
+        # If model-level file logging is enabled, add a dedicated sink
+        log_file: str | None = getattr(self.config_args, "log_file", None)
+        if not getattr(self.config_args, "no_log_file", False) and log_file:
+            try:
+                # Ensure parent dir exists
+                with suppress(Exception):
+                    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+                model_name: str | None = getattr(self.config_args, "name", None) or getattr(
+                    self.config_args, "model_identifier", None
+                )
+
+                # Add a model-specific file sink that only receives records
+                # bound to this model via the `model` extra.
+                def _model_filter(record: dict[str, Any]) -> bool:  # pragma: no cover - tiny helper
+                    try:
+                        extra = record.get("extra", {})
+                        if not isinstance(extra, dict):
+                            return False
+                        # Cast final result to bool to avoid returning Any
+                        return bool(extra.get("model") == model_name)
+                    except Exception:
+                        return False
+
+                self._log_sink_id = logger.add(
+                    log_file,
+                    level=getattr(self.config_args, "log_level", "INFO"),
+                    format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+                    enqueue=True,
+                    filter=cast("Callable[[Any], bool]", _model_filter),
+                )
+            except Exception:  # pragma: no cover - best-effort logging
+                # Log the exception with the bound logger so model context is preserved
+                self._logger.exception("Failed to add model log sink")
 
         if self._on_change:
             self._on_change(None)
@@ -399,14 +482,15 @@ class LazyHandlerManager:
             if self._shutdown:
                 return None
 
-            logger.info(self._format_log_message("Loading model", reason))
+            # Use the bound per-model logger so per-model sinks receive records
+            self._logger.info(self._format_log_message("Loading model", reason))
             handler = await instantiate_handler(self.config_args)
             self._handler = handler
             self.record_activity()
             if self._on_change:
                 self._on_change(handler)
             self._schedule_memory_cleanup()
-            logger.info(self._format_log_message("Model loaded", reason))
+            self._logger.info(self._format_log_message("Model loaded", reason))
             return handler
 
     async def unload(self, reason: str = "manual") -> bool:
@@ -436,9 +520,9 @@ class LazyHandlerManager:
                 self._on_change(None)
 
         try:
-            logger.info(self._format_log_message("Unloading model", reason))
+            self._logger.info(self._format_log_message("Unloading model", reason))
             await handler.cleanup()
-            logger.info(self._format_log_message("Model unloaded", reason))
+            self._logger.info(self._format_log_message("Model unloaded", reason))
         finally:
             mx.clear_cache()
             gc.collect()
@@ -451,6 +535,90 @@ class LazyHandlerManager:
         """
         self._shutdown = True
         await self.unload("shutdown")
+        # Remove any per-model log sink when the manager is shut down
+        with suppress(Exception):
+            self.remove_log_sink()
+
+    # ManagerProtocol adapter methods -------------------------------------------------
+    def is_vram_loaded(self) -> bool:
+        """Return True when the handler is currently loaded into memory/VRAM."""
+        return self._handler is not None
+
+    async def ensure_vram_loaded(
+        self,
+        *,
+        force: bool = False,
+        timeout: float | None = None,
+    ) -> None:
+        """Ensure the handler is loaded (idempotent).
+
+        Maps the ManagerProtocol call onto the existing ``ensure_loaded`` behavior.
+        """
+        if self._shutdown:
+            raise RuntimeError("Manager is shutting down")
+
+        if not self._handler or force:
+            coro = self.ensure_loaded("ensure_vram")
+            if timeout is not None:
+                await asyncio.wait_for(coro, timeout=timeout)
+            else:
+                await coro
+
+    async def release_vram(self, *, timeout: float | None = None) -> None:
+        """Release VRAM resources by unloading the handler (idempotent)."""
+        coro = self.unload("release_vram")
+        if timeout is not None:
+            await asyncio.wait_for(coro, timeout=timeout)
+        else:
+            await coro
+
+    def request_session(
+        self,
+        *,
+        ensure_vram: bool = True,
+        ensure_timeout: float | None = None,
+    ) -> AbstractAsyncContextManager[Any]:
+        """Return an async context manager for per-request sessions.
+
+        This adapter notifies activity and optionally ensures VRAM before yielding
+        the manager (self). It is intentionally lightweight because the
+        authoritative active-request counter lives in `ModelRegistry`.
+        """
+
+        @asynccontextmanager
+        async def _session() -> AsyncGenerator[Any, None]:
+            # Record activity so central controller timers are reset
+            self.record_activity()
+
+            if ensure_vram:
+                coro = self.ensure_vram_loaded()
+                if ensure_timeout is not None:
+                    await asyncio.wait_for(coro, timeout=ensure_timeout)
+                else:
+                    await coro
+
+            try:
+                yield self
+            finally:
+                # Mark activity on exit (helps with last-activity heuristics)
+                self.record_activity()
+
+        return _session()
+
+    def remove_log_sink(self) -> None:
+        """Remove per-model log sink if one was registered.
+
+        This is intentionally best-effort: failures to remove the sink are
+        logged but do not raise.
+        """
+        if self._log_sink_id is None:
+            return
+        try:
+            logger.remove(self._log_sink_id)
+        except Exception as e:  # pragma: no cover - best-effort cleanup
+            logger.warning(f"Failed to remove model log sink: {e}")
+        finally:
+            self._log_sink_id = None
 
     def _format_log_message(self, action: str, reason: str) -> str:
         """Format a log message with model identifier.
@@ -477,71 +645,50 @@ class LazyHandlerManager:
             try:
                 await asyncio.to_thread(mx.clear_cache)
                 await asyncio.to_thread(gc.collect)
-            except Exception as exc:  # pragma: no cover - best-effort logging
-                logger.warning(f"Background memory cleanup failed. {type(exc).__name__}: {exc}")
+            except Exception as e:  # pragma: no cover - best-effort logging
+                logger.warning(f"Background memory cleanup failed. {type(e).__name__}: {e}")
 
         task = asyncio.create_task(_run())
 
         def _on_complete(done: asyncio.Task[None]) -> None:
             self._background_tasks.discard(done)
-            exc = done.exception()
-            if exc:
-                logger.warning(f"Background memory cleanup raised. {type(exc).__name__}: {exc}")
+            e = done.exception()
+            if e:
+                logger.warning(f"Background memory cleanup raised. {type(e).__name__}: {e}")
 
         self._background_tasks.add(task)
         task.add_done_callback(_on_complete)
 
 
-class IdleAutoUnloadController:
-    """Background helper that unloads handlers after idle periods."""
+class CentralIdleAutoUnloadController:
+    """Central controller that monitors `ModelRegistry` and unloads idle models.
 
-    WATCH_LOOP_MAX_WAIT_SECONDS = 10
+    The controller scans registered models and triggers `registry.request_vram_unload`
+    when a model's idle period exceeds its configured auto-unload timeout and the
+    model has no active requests.
+    """
 
-    def __init__(self, handler_manager: LazyHandlerManager) -> None:
-        """Initialize the IdleAutoUnloadController.
+    WATCH_LOOP_MAX_WAIT_SECONDS = 5
 
-        Parameters
-        ----------
-        handler_manager : LazyHandlerManager
-            The handler manager to monitor for idle periods.
-        """
-        self.handler_manager = handler_manager
+    def __init__(self, registry: ModelRegistry) -> None:
+        self.registry = registry
         self._event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._active = False
-
-    @property
-    def auto_unload_minutes(self) -> int | None:
-        """Expose auto-unload configuration for logging."""
-        return self.handler_manager.auto_unload_minutes
+        # Per-model backoff map (model_id -> next_allowed_time)
+        self._backoff: dict[str, float] = {}
 
     def start(self) -> None:
-        """Start the auto-unload background task if configured.
-
-        Starts the background task that monitors for idle periods and
-        automatically unloads handlers when the configured timeout is
-        exceeded. Only starts if JIT is enabled and auto-unload is
-        configured.
-        """
-        if not self.handler_manager.jit_enabled:
-            return
-        if self.handler_manager.auto_unload_minutes is None:
-            return
+        """Start the central idle auto-unload background task."""
         if self._active:
             return
-
         self._active = True
         self._task = asyncio.create_task(self._watch_loop())
 
     async def stop(self) -> None:
-        """Stop the auto-unload background task.
-
-        Cancels the background monitoring task and waits for it to
-        complete. Safe to call multiple times.
-        """
+        """Stop the controller and wait for background task to finish."""
         if not self._active:
             return
-
         self._active = False
         self._event.set()
         if self._task:
@@ -549,57 +696,107 @@ class IdleAutoUnloadController:
             with suppress(asyncio.CancelledError):
                 await self._task
 
-    def notify_activity(self) -> None:
-        """Notify the background task of recent activity.
+    def notify_activity(self, model_id: str) -> None:
+        """Called by the registry when activity occurs or when a model becomes idle.
 
-        Signals the background monitoring task that activity has
-        occurred, resetting the idle timeout counter.
+        The controller uses this to reset timers and wake the watch loop.
         """
+        # model_id is intentionally unused; controller queries registry for current state
+        # Wake the loop; controller will query registry for current state
         if self._active:
             self._event.set()
 
     async def _watch_loop(self) -> None:
-        """Background loop that monitors for idle periods and unloads handlers.
-
-        Runs continuously while active, awaiting activity notifications or
-        idle timeouts. When the idle timeout is exceeded without activity,
-        automatically unloads the current handler to free memory.
-        """
         try:
             while self._active:
-                timeout = self.handler_manager.idle_timeout_seconds()
-                if timeout is None:
-                    break
-
-                if not self.handler_manager.current_handler:
-                    try:
-                        await asyncio.wait_for(
-                            self._event.wait(), timeout=self.WATCH_LOOP_MAX_WAIT_SECONDS
-                        )
-                    except TimeoutError:
-                        continue
-                    else:
-                        self._event.clear()
-                        continue
-
-                idle_elapsed = self.handler_manager.seconds_since_last_activity()
-                idle_remaining = max(timeout - idle_elapsed, 0)
-                wait_duration = min(idle_remaining, self.WATCH_LOOP_MAX_WAIT_SECONDS)
-
-                if wait_duration <= 0:
-                    await self.handler_manager.unload(
-                        f"Idle for {self.auto_unload_minutes} minutes"
-                    )
+                # Iterate registered models and consider unloading
+                try:
+                    entries = self.registry.list_models()
+                    models = [m["id"] for m in entries]
+                except Exception:
+                    await asyncio.sleep(self.WATCH_LOOP_MAX_WAIT_SECONDS)
                     continue
 
+                now = time.time()
+                for mid in models:
+                    # Skip if backoff in effect
+                    next_allowed = self._backoff.get(mid, 0)
+                    if now < next_allowed:
+                        continue
+
+                    try:
+                        status = self.registry.get_vram_status(mid)
+                    except KeyError:
+                        continue
+
+                    # active_requests prevents unload
+                    if status.get("active_requests", 0) > 0:
+                        continue
+
+                    handler = None
+                    try:
+                        handler = self.registry.get_handler(mid)
+                    except KeyError:
+                        handler = None
+
+                    # Determine auto-unload timeout (minutes) from handler or metadata
+                    minutes = None
+                    if handler is not None:
+                        minutes = getattr(handler, "auto_unload_minutes", None)
+                    if minutes is None:
+                        # Fall back to metadata extras if present
+                        try:
+                            meta: dict[str, Any] = next(
+                                (e.get("metadata", {}) for e in entries if e.get("id") == mid),
+                                {},
+                            )
+                            minutes = meta.get("auto_unload_minutes")
+                        except Exception:
+                            minutes = None
+
+                    if minutes is None:
+                        continue
+
+                    timeout_secs = int(minutes) * 60
+
+                    # If handler provides last-activity metric, use it
+                    idle_elapsed = None
+                    if handler is not None and hasattr(handler, "seconds_since_last_activity"):
+                        try:
+                            idle_elapsed = handler.seconds_since_last_activity()
+                        except Exception:
+                            idle_elapsed = None
+
+                    # If we don't have per-handler idle metric, derive from vram timestamps
+                    if idle_elapsed is None:
+                        last_request = status.get("vram_last_request_ts")
+                        if last_request is not None:
+                            # Prefer actual request activity timestamp
+                            last_activity_ts = float(last_request)
+                        else:
+                            # Fall back to load/unload times if no request activity recorded
+                            last_unload = status.get("vram_last_unload_ts") or 0
+                            last_load = status.get("vram_last_load_ts") or 0
+                            last_activity_ts = max(last_load, last_unload)
+                        idle_elapsed = max(0, now - last_activity_ts)
+
+                    if idle_elapsed >= timeout_secs and status.get("vram_loaded", False):
+                        try:
+                            await self.registry.request_vram_unload(mid)
+                        except Exception:
+                            # On failure, backoff to avoid tight error loops
+                            self._backoff[mid] = time.time() + 30
+                            logger.exception(f"Failed to auto-unload model {mid}")
+
+                # Wait for activity or timeout
                 try:
-                    await asyncio.wait_for(self._event.wait(), timeout=wait_duration)
+                    await asyncio.wait_for(
+                        self._event.wait(),
+                        timeout=self.WATCH_LOOP_MAX_WAIT_SECONDS,
+                    )
                 except TimeoutError:
-                    if self.handler_manager.seconds_since_last_activity() >= timeout:
-                        await self.handler_manager.unload(
-                            f"Idle for {self.auto_unload_minutes} minutes"
-                        )
-                else:
+                    pass
+                finally:
                     self._event.clear()
         except asyncio.CancelledError:
             pass
@@ -614,7 +811,7 @@ def create_lifespan(
     auto-unload functionality during application startup:
 
     - Creates a LazyHandlerManager to manage model loading/unloading
-    - Creates an IdleAutoUnloadController for automatic unloading when idle
+    - Creates a CentralIdleAutoUnloadController for automatic unloading when idle
     - If JIT is disabled, loads the handler immediately at startup
     - Starts the auto-unload background task if configured
     - Performs initial memory cleanup
@@ -649,6 +846,46 @@ def create_lifespan(
         app : FastAPI
             The FastAPI application instance.
         """
+        registry = ModelRegistry()
+        app.state.model_registry = registry
+        registry_model_id = get_registry_model_id(config_args)
+        base_registry_metadata = {
+            "model_path": config_args.model_identifier,
+            "model_type": config_args.model_type,
+            "context_length": config_args.context_length,
+            "jit_enabled": config_args.jit_enabled,
+            "auto_unload_minutes": config_args.auto_unload_minutes,
+            "group": config_args.group,
+        }
+        registry.register_model(
+            model_id=registry_model_id,
+            handler=None,
+            model_type=config_args.model_type,
+            context_length=config_args.context_length,
+            metadata_extras=base_registry_metadata,
+        )
+        registry_tasks: set[asyncio.Task[None]] = set()
+
+        async def _sync_registry_update(handler: MLXHandler | None) -> None:
+            metadata_payload = dict(base_registry_metadata)
+            metadata_payload["model_path"] = getattr(
+                handler,
+                "model_path",
+                config_args.model_identifier,
+            )
+            status = "initialized" if handler else "unloaded"
+            try:
+                await registry.update_model_state(
+                    registry_model_id,
+                    handler=handler,
+                    status=status,
+                    metadata_updates=metadata_payload,
+                )
+            except Exception as e:  # pragma: no cover - defensive logging
+                logger.warning(
+                    f"Failed to synchronize model registry for {registry_model_id}. "
+                    f"{type(e).__name__}: {e}",
+                )
 
         def _update_model_metadata(handler: MLXHandler | None) -> None:
             model_metadata = getattr(app.state, "model_metadata", None)
@@ -661,18 +898,40 @@ def create_lifespan(
             if handler:
                 entry["created"] = getattr(handler, "model_created", int(time.time()))
                 metadata_block["model_path"] = getattr(
-                    handler, "model_path", metadata_block.get("model_path")
+                    handler,
+                    "model_path",
+                    metadata_block.get("model_path"),
                 )
 
         def _update_handler(handler: MLXHandler | None) -> None:
             app.state.handler = handler
             _update_model_metadata(handler)
+            task = asyncio.create_task(_sync_registry_update(handler))
+
+            def _cleanup(done: asyncio.Task[None]) -> None:
+                registry_tasks.discard(done)
+                e = done.exception()
+                if e:
+                    logger.warning(f"Registry update task raised. {type(e).__name__}: {e}")
+
+            registry_tasks.add(task)
+            task.add_done_callback(_cleanup)
 
         handler_manager = LazyHandlerManager(config_args, on_change=_update_handler)
         app.state.handler_manager = handler_manager
-        auto_unload_controller = IdleAutoUnloadController(handler_manager)
-        app.state.auto_unload_controller = auto_unload_controller
-        handler_manager.set_activity_callback(auto_unload_controller.notify_activity)
+
+        # Central controller watches the ModelRegistry and can auto-unload any
+        # registered model when idle. Register the registry notifier so
+        # handler sessions and other registry-driven activity can reset timers.
+        central_controller = CentralIdleAutoUnloadController(registry)
+        registry.register_activity_notifier(central_controller.notify_activity)
+        app.state.idle_controller = central_controller
+
+        # Wire manager-level activity into the central controller so a single
+        # controller handles auto-unload decisions for all models.
+        handler_manager.set_activity_callback(
+            lambda: central_controller.notify_activity(registry_model_id),
+        )
 
         try:
             if not config_args.jit_enabled:
@@ -681,7 +940,7 @@ def create_lifespan(
             await handler_manager.shutdown()
             raise
 
-        auto_unload_controller.start()
+        central_controller.start()
 
         # Initial memory cleanup
         mx.clear_cache()
@@ -692,15 +951,18 @@ def create_lifespan(
         # Shutdown
         logger.info("Shutting down application")
         try:
-            await auto_unload_controller.stop()
+            await central_controller.stop()
         except Exception as e:
-            logger.error(f"Error stopping auto-unload controller. {type(e).__name__}: {e}")
+            logger.error(f"Error stopping central auto-unload controller. {type(e).__name__}: {e}")
 
         try:
             await handler_manager.shutdown()
             logger.info("Resources cleaned up successfully")
         except Exception as e:
             logger.error(f"Error during shutdown. {type(e).__name__}: {e}")
+
+        if registry_tasks:
+            await asyncio.gather(*registry_tasks, return_exceptions=True)
 
         # Final memory cleanup
         mx.clear_cache()
@@ -729,7 +991,6 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
         A configuration object that can be passed to
         ``uvicorn.Server(config).run()`` to start the application.
     """
-
     # Configure logging based on CLI parameters
     configure_logging(
         log_file=config_args.log_file,
@@ -760,89 +1021,10 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
                 "status": "unloaded",
                 "model_path": config_args.model_identifier,
             },
-        }
+        },
     ]
 
-    app.include_router(router)
-    app.add_middleware(RequestTrackingMiddleware)
-
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    @app.middleware("http")
-    async def add_process_time_header(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        """Middleware to add processing time header and run cleanup.
-
-        Measures request processing time, appends an ``X-Process-Time``
-        header, and increments a simple request counter used to trigger
-        periodic memory cleanup for long-running processes.
-
-        Parameters
-        ----------
-        request : Request
-            The incoming HTTP request.
-        call_next : Callable[[Request], Awaitable[Response]]
-            The next middleware/request handler in the chain.
-
-        Returns
-        -------
-        Response
-            The HTTP response with added processing time header.
-        """
-        start_time = time.time()
-        response = await call_next(request)
-        process_time = time.time() - start_time
-        response.headers["X-Process-Time"] = str(process_time)
-
-        # Periodic memory cleanup for long-running processes
-        if hasattr(request.app.state, "request_count"):
-            request.app.state.request_count += 1
-        else:
-            request.app.state.request_count = 1
-
-        # Clean up memory every 50 requests
-        if request.app.state.request_count % 50 == 0:
-            mx.clear_cache()
-            gc.collect()
-            logger.debug(
-                f"Performed memory cleanup after {request.app.state.request_count} requests"
-            )
-
-        return response
-
-    @app.exception_handler(Exception)
-    async def global_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
-        """Global exception handler that logs and returns a 500 payload.
-
-        Logs the exception (with traceback) and returns a generic JSON
-        response with a 500 status code so internal errors do not leak
-        implementation details to clients.
-
-        Parameters
-        ----------
-        _request : Request
-            The HTTP request that caused the exception (unused).
-        exc : Exception
-            The exception that was raised.
-
-        Returns
-        -------
-        JSONResponse
-            A JSON response with 500 status code and error details.
-        """
-        logger.exception(f"Global exception handler caught. {type(exc).__name__}: {exc}")
-        return JSONResponse(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            content={"error": {"message": "Internal server error", "type": "internal_error"}},
-        )
+    configure_fastapi_app(app)
 
     logger.info(f"Starting server on {config_args.host}:{config_args.port}")
     return uvicorn.Config(
@@ -852,3 +1034,207 @@ def setup_server(config_args: MLXServerConfig) -> uvicorn.Config:
         log_level=config_args.log_level.lower(),
         access_log=True,
     )
+
+
+def configure_fastapi_app(app: FastAPI) -> None:
+    """Register routers, middleware, and global handlers on ``app``.
+
+    This helper centralizes FastAPI configuration that is shared between the
+    standard single-model server and the hub-aware server so both surfaces
+    expose identical middleware, routing, and error handling behavior.
+    """
+    app.include_router(router)
+    # Ensure a ModelRegistry is available on the application state so
+    # hub-aware endpoints and admin routes can access model metadata
+    # and request VRAM operations without requiring explicit wiring.
+    if not getattr(app.state, "model_registry", None):
+        app.state.model_registry = ModelRegistry()
+    app.add_middleware(RequestTrackingMiddleware)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    async def _hub_registry_sync_loop(app: FastAPI) -> None:
+        """Background task: poll hub daemon `/hub/status` and reconcile registry.
+
+        This keeps the authoritative `ModelRegistry` accurate when the hub runs
+        as a separate process. The task is resilient to temporary failures and
+        logs warnings on update failures.
+        """
+        registry: ModelRegistry | None = getattr(app.state, "model_registry", None)
+        if registry is None:
+            logger.debug("No model registry present; hub sync loop exiting")
+            return
+
+        interval = HUB_POLL_INTERVAL_SECONDS
+        # Helper uses its own fake request; no local fake_req needed here
+
+        while True:
+            # Run a single sync iteration. We explicitly handle
+            # asyncio.CancelledError separately so that cancellations
+            # raised inside `_hub_sync_once` are not swallowed by a
+            # generic Exception handler.
+            try:
+                await _hub_sync_once(app)
+            except asyncio.CancelledError:
+                logger.info("Hub registry sync loop cancelled")
+                return
+            except Exception:
+                logger.exception("Error running hub sync iteration")
+
+            # Sleep between iterations, but allow cancellation to
+            # interrupt the sleep as well.
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("Hub registry sync loop cancelled")
+                return
+            except Exception:
+                logger.exception("Unexpected error in hub registry sync loop")
+
+    def _start_hub_sync_task() -> None:
+        """Start background hub sync task on application startup."""
+        # Avoid starting multiple tasks
+        if getattr(app.state, "hub_sync_task", None) is not None:
+            return
+        loop = asyncio.get_event_loop()
+        task = loop.create_task(_hub_registry_sync_loop(app))
+        app.state.hub_sync_task = task
+
+    def _stop_hub_sync_task() -> None:
+        """Cancel the hub sync background task on shutdown."""
+        task = getattr(app.state, "hub_sync_task", None)
+        if task is None:
+            return
+        try:
+            task.cancel()
+        except Exception:
+            logger.debug("Failed to cancel hub sync task")
+
+    app.add_event_handler("startup", _start_hub_sync_task)
+    app.add_event_handler("shutdown", _stop_hub_sync_task)
+
+    @app.middleware("http")
+    async def add_process_time_header(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """Attach timing metadata and trigger periodic memory cleanup."""
+        start_time = time.time()
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        response.headers["X-Process-Time"] = str(process_time)
+
+        request_count = getattr(request.app.state, "request_count", 0) + 1
+        request.app.state.request_count = request_count
+
+        if request_count % 50 == 0:
+            mx.clear_cache()
+            gc.collect()
+            logger.debug(f"Performed memory cleanup after {request_count} requests")
+
+        return response
+
+    @app.exception_handler(Exception)
+    async def global_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+        """Log unexpected exceptions and emit a generic payload.
+
+        Preserve FastAPI `HTTPException` responses so controllers and stubs
+        can raise them to communicate status codes to clients. For other
+        unexpected exceptions emit a generic 500 payload.
+        """
+        # Preserve HTTP-like exceptions (Starlette/FastAPI) by reflecting
+        # their status code and detail when present. This is more robust
+        # than relying on a specific exception class identity.
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int):
+            detail = getattr(exc, "detail", None)
+            return JSONResponse(status_code=status_code, content={"detail": detail})
+
+        logger.exception(f"Global exception handler caught. {type(exc).__name__}: {exc}")
+        return JSONResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            content={"error": {"message": "Internal server error", "type": "internal_error"}},
+        )
+
+
+async def _hub_sync_once(app: FastAPI) -> None:
+    """Perform one hub status poll and reconcile the `ModelRegistry`.
+
+    This helper contains the core logic for a single iteration so unit
+    tests can call it directly without starting the background loop.
+    """
+    registry: ModelRegistry | None = getattr(app.state, "model_registry", None)
+    if registry is None:
+        logger.debug("No model registry present; skipping hub sync iteration")
+        return
+
+    fake_req = SimpleNamespace(app=app)
+    try:
+        hub_config = _load_hub_config_from_request(cast("Request", fake_req))
+    except HubConfigError:
+        # No hub config available for this server
+        return
+
+    try:
+        snapshot = await _call_daemon_api_async(hub_config, "GET", "/hub/status", timeout=2.0)
+    except Exception as e:
+        logger.debug(f"Hub sync: failed to fetch hub status: {e}")
+        return
+
+    models = snapshot.get("models") if isinstance(snapshot, dict) else None
+    if not isinstance(models, list):
+        return
+
+    for entry in models:
+        try:
+            if not isinstance(entry, dict):
+                continue
+            model_path = entry.get("model_path")
+            if not isinstance(model_path, str):
+                continue
+
+            vram_loaded = bool(entry.get("memory_loaded", False))
+            state = str(entry.get("state") or "").lower()
+            status = "loaded" if vram_loaded else ("running" if state == "running" else "stopped")
+
+            metadata_updates: dict[str, object] = {"vram_loaded": vram_loaded}
+
+            # Timestamps: prefer explicit fields if present
+            started_at = entry.get("started_at")
+            if isinstance(started_at, (int, float)):
+                metadata_updates["vram_last_load_ts"] = int(started_at)
+
+            last_request = entry.get("last_request_ts") or entry.get("vram_last_request_ts")
+            if isinstance(last_request, (int, float)):
+                metadata_updates["vram_last_request_ts"] = int(last_request)
+
+            last_unload = entry.get("last_unload_ts") or entry.get("vram_last_unload_ts")
+            if isinstance(last_unload, (int, float)):
+                metadata_updates["vram_last_unload_ts"] = int(last_unload)
+
+            load_error = entry.get("vram_load_error") or entry.get("load_error")
+            if isinstance(load_error, str):
+                metadata_updates["vram_load_error"] = load_error
+
+            active_requests = entry.get("active_requests")
+            if isinstance(active_requests, int):
+                metadata_updates["active_requests"] = active_requests
+
+            try:
+                if registry.has_model(model_path):
+                    await registry.update_model_state(
+                        model_path, metadata_updates=metadata_updates, status=status
+                    )
+            except KeyError:
+                # Not registered locally — skip
+                continue
+            except Exception as e:
+                logger.warning(f"Failed to update registry for {model_path}: {e}")
+        except Exception:
+            logger.exception("Unexpected error while syncing model entry")

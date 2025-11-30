@@ -8,8 +8,10 @@ streaming, and caching capabilities.
 from __future__ import annotations
 
 from collections.abc import Generator
+from contextlib import redirect_stderr, redirect_stdout
 import gc
 import os
+from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
@@ -19,6 +21,7 @@ from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.utils import load
 from outlines.processors import OutlinesLogitsProcessor
 
+from ..const import DEFAULT_CONTEXT_LENGTH, DEFAULT_TRUST_REMOTE_CODE
 from ..utils.outlines_transformer_tokenizer import OutlinesTransformerTokenizer
 
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
@@ -39,12 +42,29 @@ class MLX_LM:
     """
 
     def __init__(
-        self, model_path: str, context_length: int = 32768, *, trust_remote_code: bool = False
+        self,
+        model_path: str,
+        *,
+        context_length: int = DEFAULT_CONTEXT_LENGTH,
+        trust_remote_code: bool = DEFAULT_TRUST_REMOTE_CODE,
     ) -> None:
         try:
-            self.model, self.tokenizer, *_ = load(
-                model_path, lazy=False, tokenizer_config={"trust_remote_code": trust_remote_code}
-            )
+            # Some third-party download utilities (huggingface_hub + tqdm)
+            # write progress to stderr which can raise BrokenPipeError when
+            # the server's stderr is closed or wrapped by the runtime. To
+            # avoid surfacing that low-level error during handler
+            # initialization we temporarily redirect stderr to devnull while
+            # the model is downloaded/loaded.
+            with (
+                Path(os.devnull).open("w") as _devnull,
+                redirect_stdout(_devnull),
+                redirect_stderr(_devnull),
+            ):
+                self.model, self.tokenizer, *_ = load(
+                    model_path,
+                    lazy=False,
+                    tokenizer_config={"trust_remote_code": trust_remote_code},
+                )
             self.pad_token_id = self.tokenizer.pad_token_id
             self.bos_token = self.tokenizer.bos_token
             self.model_type = self.model.model_type
@@ -71,7 +91,9 @@ class MLX_LM:
         return embeddings / (l2_norms + 1e-8)
 
     def _batch_process(
-        self, prompts: list[str], batch_size: int = DEFAULT_BATCH_SIZE
+        self,
+        prompts: list[str],
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> list[list[int]]:
         """Process prompts in batches with optimized tokenization."""
         all_tokenized = []
@@ -118,7 +140,11 @@ class MLX_LM:
         return str(self.model_type)
 
     def get_embeddings(
-        self, prompts: list[str], batch_size: int = DEFAULT_BATCH_SIZE, *, normalize: bool = True
+        self,
+        prompts: list[str],
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        *,
+        normalize: bool = True,
     ) -> list[list[float]]:
         """
         Get embeddings for a list of prompts efficiently.
@@ -171,7 +197,11 @@ class MLX_LM:
         return all_embeddings
 
     def __call__(
-        self, messages: list[dict[str, str]], *, stream: bool = False, **kwargs: Any
+        self,
+        messages: list[dict[str, str]],
+        *,
+        stream: bool = False,
+        **kwargs: Any,
     ) -> tuple[str | Generator[Any, None, None], int]:
         """
         Generate text response from the model.
@@ -200,14 +230,17 @@ class MLX_LM:
         repetition_penalty = kwargs.get("repetition_penalty", 1.0)
         repetition_context_size = kwargs.get("repetition_context_size", 20)
         logits_processors = make_logits_processors(
-            repetition_penalty=repetition_penalty, repetition_context_size=repetition_context_size
+            repetition_penalty=repetition_penalty,
+            repetition_context_size=repetition_context_size,
         )
         json_schema = kwargs.get("schema")
         if json_schema:
             logits_processors.append(
                 OutlinesLogitsProcessor(  # type: ignore[abstract,call-arg]
-                    schema=json_schema, tokenizer=self.outlines_tokenizer, tensor_library_name="mlx"
-                )
+                    schema=json_schema,
+                    tokenizer=self.outlines_tokenizer,
+                    tensor_library_name="mlx",
+                ),
             )
 
         mx.random.seed(seed)

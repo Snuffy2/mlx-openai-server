@@ -740,6 +740,149 @@ python -m app.main --model-path <path-to-model> --model-type lm --log-file /tmp/
 - **Formatted output**: Both console and file logs include timestamps, log levels, and structured formatting
 - **Colorized console**: Console output includes color coding for better readability
 
+### Hub Mode
+
+Hub mode provides multi-model orchestration via a dedicated hub daemon. The daemon owns process supervision, memory/runtime state, and an HTTP control plane rooted at `/hub/*`.
+
+Summary
+- The hub daemon is the authoritative owner of model lifecycle (spawn/monitor/terminate) and handler memory load/unload state.
+- Operators use the CLI to interact with the hub; the CLI issues HTTP requests to the daemon for control actions.
+- The hub exposes a lightweight HTML status page at `/hub` (when enabled) that polls `/hub/status`.
+
+Configuration
+- The hub uses a `hub.yaml` file with `models` and `groups` entries to declare managed models, default-start flags, group capacities, and per-model handler options (e.g., `jit_enabled`, `auto_unload_minutes`).
+
+Hub configuration file
+- Default location: `~/mlx-openai-server/hub.yaml` (override with CLI `--config` when needed)
+- Purpose: declare the models the hub should manage, per-model runtime flags, and optional groups that constrain memory loading.
+
+
+Top-level keys (common)
+
+| Field | Type | Required | Default | Description |
+| --- | --- | ---: | --- | --- |
+| `host` | string | — | `0.0.0.0` | Host/address the shared OpenAI-compatible endpoint binds to. |
+| `port` | integer | — | `8000` | Port for the shared controller (OpenAI-compatible API). |
+| `model_starting_port` | integer | — | `47850` | Base port for auto-assigned model workers when `port` is omitted. |
+| `log_path` | string | — | `~/mlx-openai-server/logs` | Directory for hub and model logs. |
+| `enable_status_page` | bool | — | `true` | Enable the HTML `/hub` dashboard which polls `/hub/status`. |
+| `models` | list | ✅ | — | Required list of model entries to register/manage. |
+| `groups` | list | — | `[]` | Optional list of group rules to enforce memory-throttling. |
+
+Per-model fields
+
+| Field | Type | Required | Default | Description |
+| --- | --- | ---: | --- | --- |
+| `name` | string | ✅ | — | Friendly model identifier used by clients (slug-safe: letters, digits, `-` or `_`). |
+| `model_path` | string | ✅ | — | Local path or Hugging Face repo ID for the model. |
+| `port` | integer | — | auto-assigned | Explicit worker port; hub assigns one from `model_starting_port` if omitted. |
+| `default` | bool | — | `false` | If `true`, hub starts the worker process when the hub starts. |
+| `group` | string | — | — | Name of the group this model belongs to (see `groups`). |
+| `jit_enabled` | bool | — | — | JIT loading flag (passed through to the model server). |
+| `auto_unload_minutes` | integer | — | — | Idle minutes after which handlers are auto-unloaded from memory. |
+| `max_concurrency` | integer | — | — | Maximum concurrent requests allowed for the model. |
+| `log_level` | string | — | — | Per-model log level override. |
+| `...` | — | — | — | Any other `MLXServerConfig` options are accepted per model. |
+
+Groups
+
+| Field | Type | Required | Default | Description |
+| --- | --- | ---: | --- | --- |
+| `name` | string | ✅ | — | Group identifier referenced by per-model `group`. |
+| `max_loaded` | integer | — | — | Maximum number of models in this group that may be memory-loaded simultaneously. Exceeding the cap returns an OpenAI-style `429`. |
+
+Port allocation note
+- When a model omits the `port` field, the hub assigns sequential ports starting at `model_starting_port` (default `47850`). Busy ports are skipped automatically.
+
+Example `hub.yaml`
+```yaml
+host: 0.0.0.0
+port: 5005
+log_level: INFO
+log_path: ~/mlx-openai-server/logs
+enable_status_page: true
+
+models:
+  - name: qwen3_30b
+    model_path: mlx-community/Qwen3-30B-A3B-4bit-DWQ
+    model_type: lm
+    enable_auto_tool_choice: true
+    trust_remote_code: true
+    tool_call_parser: qwen3_moe
+    reasoning_parser: qwen3_moe
+    jit_enabled: true
+    auto_unload_minutes: 120
+    log_level: DEBUG
+    group: high_load
+    default: true
+
+  - name: qwen3_4b
+    model_path: mlx-community/Qwen3-4B-Instruct-2507-8bit
+    model_type: lm
+    max_concurrency: 1
+    enable_auto_tool_choice: true
+    trust_remote_code: true
+    tool_call_parser: qwen3
+    reasoning_parser: qwen3
+    jit_enabled: true
+    auto_unload_minutes: 60
+    log_level: DEBUG
+
+  - name: gpt_oss_20b
+    model_path: nightmedia/unsloth-gpt-oss-20b-q5-hi-mlx
+    model_type: lm
+    enable_auto_tool_choice: true
+    trust_remote_code: true
+    tool_call_parser: harmony
+    reasoning_parser: harmony
+    jit_enabled: true
+    auto_unload_minutes: 120
+    group: high_load
+
+groups:
+  - name: high_load
+    max_loaded: 1
+```
+
+Per-model logs and telemetry
+- Each managed model writes to `log_path/<name>.log`. The hub emits structured records including `hub_model` and `hub_group` fields to aid observability.
+
+Control API
+- `GET /hub/status` — Returns a registry snapshot with counts, timestamps, and per-model metadata.
+- `POST /hub/reload` — Reload the hub configuration and reconcile running processes. Returns a diff with `started`, `stopped`, and `unchanged` lists.
+- `POST /hub/shutdown` — Gracefully request the daemon to stop all managed models and exit.
+- `POST /hub/models/{model}/start` — Start the worker process for the named model (if configured).
+- `POST /hub/models/{model}/stop` — Stop the worker process for the named model.
+- `POST /hub/models/{model}/load` — Instruct the daemon/controller to load handlers into memory for the named model.
+- `POST /hub/models/{model}/unload` — Instruct the daemon/controller to unload handlers from memory for the named model.
+
+Note: the CLI exposes related commands such as `hub start-model`/`hub stop-model` (to manage model processes) and
+`hub load-model`/`hub unload-model` (to control in-memory handlers). Those CLI commands call the canonical HTTP
+endpoints listed above (`/hub/models/{model}/start`, `/hub/models/{model}/stop`, `/hub/models/{model}/load`,
+`/hub/models/{model}/unload`).
+
+CLI usage
+```bash
+# Show hub status (reads hub.yaml by default unless --config is provided)
+mlx-openai-server hub status
+
+# Start configured models via the hub
+mlx-openai-server hub start-model alpha
+
+# Load handlers into memory via the hub
+mlx-openai-server hub load-model alpha
+
+# Reload hub config through the hub
+mlx-openai-server hub reload
+
+# Shutdown the hub
+mlx-openai-server hub stop
+```
+
+Web status page
+- When `enable_status_page` is `true`, the HTML dashboard at `/hub` displays a live snapshot of registered models, process state, memory load status, and exposes Start/Stop and Load/Unload controls for operators.
+- The dashboard polls `/hub/status` periodically and shows flash/toast messages for actions.
+
 ### Using the API
 
 The server provides OpenAI-compatible endpoints that you can use with standard OpenAI client libraries. Here are some examples:
@@ -754,7 +897,7 @@ client = openai.OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="local-model",  # Model name doesn't matter for local server
+  model="local-model",  # Replace with hub model name (e.g., "qwen3_4b") when hub mode is enabled
     messages=[
         {"role": "user", "content": "What is the capital of France?"}
     ],
